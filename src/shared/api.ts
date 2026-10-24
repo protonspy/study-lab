@@ -167,6 +167,9 @@ export interface Api {
   /** a plan straight from the deterministic planner, no LLM */
   autoPlan(labId: string, days?: number, minutesPerDay?: number): Promise<StudyPlan>
   learner(labId: string): Promise<LearnerView>
+  performance(labId: string): Promise<import("./viz").PerformanceData>
+  timeline(labId: string): Promise<import("./viz").TimelineData>
+  graphView(labId: string): Promise<import("./viz").GraphViewData>
   setTaskDone(labId: string, planId: string, taskId: string, done: boolean): Promise<StudyPlan>
   setPlanStatus(labId: string, planId: string, status: StudyPlan["status"]): Promise<void>
   threads(labId: string): Promise<ChatThread[]>
@@ -229,6 +232,9 @@ export const API_METHODS = [
   "plans",
   "autoPlan",
   "learner",
+  "performance",
+  "timeline",
+  "graphView",
   "setTaskDone",
   "setPlanStatus",
   "threads",

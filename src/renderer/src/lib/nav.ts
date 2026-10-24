@@ -1,9 +1,9 @@
 import { useSyncExternalStore } from "react"
 import type { QueueItem } from "./stats"
 
-export type View = "today" | "review" | "cards" | "drill" | "practice" | "exam" | "notes" | "mistakes" | "library" | "coach" | "analytics" | "content" | "settings"
+export type View = "today" | "review" | "cards" | "drill" | "practice" | "exam" | "notes" | "mistakes" | "library" | "coach" | "performance" | "timeline" | "graph" | "analytics" | "content" | "settings"
 
-export const VIEWS: View[] = ["today", "review", "cards", "drill", "practice", "exam", "notes", "mistakes", "library", "coach", "analytics", "content", "settings"]
+export const VIEWS: View[] = ["today", "review", "cards", "drill", "practice", "exam", "notes", "mistakes", "library", "coach", "performance", "timeline", "graph", "analytics", "content", "settings"]
 
 export interface RunSpec {
   title: string

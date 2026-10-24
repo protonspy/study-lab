@@ -5,7 +5,10 @@ import {
   Bot,
   ChevronsUpDown,
   CircleAlert,
+  ChartNoAxesGantt,
   Database,
+  Gauge,
+  Network,
   HardDrive,
   Layers,
   LayoutDashboard,
@@ -46,6 +49,9 @@ import { CoachView } from "@/views/CoachView"
 import { AnalyticsView } from "@/views/AnalyticsView"
 import { ContentView } from "@/views/ContentView"
 import { SetupWizard } from "@/views/SetupWizard"
+import { PerformanceView } from "@/views/PerformanceView"
+import { TimelineView } from "@/views/TimelineView"
+import { ConceptMapView } from "@/views/ConceptMapView"
 
 type NavItem = { view: View; label: string; Icon: LucideIcon }
 
@@ -63,6 +69,9 @@ const STUDY: NavItem[] = [
 
 const LEARN: NavItem[] = [
   { view: "coach", label: "Coach", Icon: Bot },
+  { view: "performance", label: "Performance", Icon: Gauge },
+  { view: "timeline", label: "Timeline", Icon: ChartNoAxesGantt },
+  { view: "graph", label: "Concept map", Icon: Network },
   { view: "analytics", label: "Analytics", Icon: BarChart3 },
 ]
 
@@ -219,6 +228,12 @@ function CurrentView({ view }: { view: View }) {
       return <LibraryView />
     case "coach":
       return <CoachView />
+    case "performance":
+      return <PerformanceView />
+    case "timeline":
+      return <TimelineView />
+    case "graph":
+      return <ConceptMapView />
     case "analytics":
       return <AnalyticsView />
     case "content":

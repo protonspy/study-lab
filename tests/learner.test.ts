@@ -196,3 +196,18 @@ describe("deterministic planner", () => {
     }
   })
 })
+
+describe("visualisation helpers", () => {
+  it("draws quantile dots symmetric around the mean and a Wilson interval", async () => {
+    const { probit, quantileDots, wilson } = await import("../src/shared/viz")
+    assert.ok(Math.abs(probit(0.5)) < 1e-9)
+    assert.ok(Math.abs(probit(0.975) - 1.96) < 0.01)
+    const dots = quantileDots(700, 50)
+    assert.equal(dots.length, 20)
+    assert.ok(Math.abs(dots[0] + dots[19] - 1400) < 1e-6)
+    assert.equal(dots.filter((d) => d >= 700).length, 10)
+    const [lo, hi] = wilson(8, 10)!
+    assert.ok(lo < 0.8 && hi > 0.8 && hi <= 1)
+    assert.equal(wilson(0, 0), null)
+  })
+})

@@ -16,6 +16,7 @@ import { deleteConnection, listConnections, saveConnection, testConnection } fro
 import { deleteSkill, listSkills, saveSkill } from "./harness/skills"
 import { chat, currentModel, initKey, keyHint, listModels, readKey, saveKey } from "./openrouter"
 import * as repo from "./repo"
+import * as viz from "./viz"
 import { labLearner, labPlan, plannerPlan } from "./learner"
 
 let win: BrowserWindow | null = null
@@ -162,6 +163,9 @@ const api: Api = {
     const m = labLearner(labId)
     return { kcs: m.kcs, predicted: m.predicted, calibration: m.calibration, errors: m.errors, rapidRate: m.rapidRate, topicLevel: m.topicLevel, priorities: labPlan(labId, { days: 1 }).priorities }
   },
+  performance: async (labId) => viz.performance(labId),
+  timeline: async (labId) => viz.timeline(labId),
+  graphView: async (labId) => viz.graphView(labId),
   setTaskDone: async (labId, planId, taskId, done) => {
     const p = repo.getPlan(labId, planId)
     if (!p) throw new Error("That plan is gone.")

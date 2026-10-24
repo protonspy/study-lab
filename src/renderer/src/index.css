@@ -58,6 +58,10 @@
   --d6: #b8860b;
   --d7: #0e94ad;
   --d8: #a0522d;
+  /* single-hue sequential scale for mastery (low → high) */
+  --seq: #2f6db5;
+  --seq-0: #d6e4f5;
+  --seq-1: #1b4a85;
   --card-rule: #e0574f;
   --card-lines: rgba(42, 120, 214, 0.1);
   --heat-0: #e3e8ed;
@@ -128,6 +132,9 @@
     --d6: #b8890c;
     --d7: #1ba6c0;
     --d8: #c0663a;
+    --seq: #6ea4e6;
+    --seq-0: #22344a;
+    --seq-1: #9cc4f3;
     --card-rule: #c2554e;
     --card-lines: rgba(140, 170, 220, 0.07);
     --heat-0: #1e2731;
@@ -166,6 +173,9 @@
   --d6: #b8890c;
   --d7: #1ba6c0;
   --d8: #c0663a;
+  --seq: #6ea4e6;
+  --seq-0: #22344a;
+  --seq-1: #9cc4f3;
   --card-rule: #c2554e;
   --card-lines: rgba(140, 170, 220, 0.07);
   --heat-0: #1e2731;
@@ -207,6 +217,7 @@
   --color-d6: var(--d6);
   --color-d7: var(--d7);
   --color-d8: var(--d8);
+  --color-seq: var(--seq);
 
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);

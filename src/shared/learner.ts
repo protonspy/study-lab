@@ -44,6 +44,10 @@ export interface KcState {
   /** a confident wrong answer not yet retested correctly */
   pendingRetest: boolean
   lastErrorAt: number | null
+  /** when mastery first reached 0.8 and stayed there (cleared if it drops below 0.7) */
+  masteredAt: number | null
+  /** misconceptions fixed: a question answered right after the same wrong option twice */
+  resolved: { qid: string; at: number }[]
 }
 
 export interface LearnerModel {
@@ -137,6 +141,8 @@ export function learnerModel(inp: LearnerInput): LearnerModel {
       misconceptions: [],
       pendingRetest: false,
       lastErrorAt: null,
+      masteredAt: null,
+      resolved: [],
     })
   }
 
@@ -192,6 +198,11 @@ export function learnerModel(inp: LearnerInput): LearnerModel {
       }
     } else {
       lastCorrect.set(q.id, e.at)
+      const had = [...(wrongPicks.get(q.id)?.values() ?? [])].some((v) => v.count >= 2)
+      if (had) {
+        const primary = kcs[0]?.kc
+        if (primary) st.get(primary)?.resolved.push({ qid: q.id, at: e.at })
+      }
       wrongPicks.delete(q.id)
     }
 
@@ -212,6 +223,8 @@ export function learnerModel(inp: LearnerInput): LearnerModel {
         if (e.conf === 2 && e.mode !== "exam") s.pendingRetest = true
       }
       if (ok && role === "primary") s.pendingRetest = false
+      if (s.masteredAt == null && s.mastery >= 0.8) s.masteredAt = e.at
+      else if (s.masteredAt != null && s.mastery < 0.7) s.masteredAt = null
     }
     lastAttempt.set(q.id, e.at)
   }
