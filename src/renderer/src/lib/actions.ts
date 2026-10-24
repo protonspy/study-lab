@@ -1,3 +1,4 @@
+import { isRapid, readingSec } from "@shared/analytics"
 import { data, EXAM_FACTS } from "./data"
 import { currentView } from "./nav"
 import { capFromExam, dayKey, questionGrade, schedule, type Grade } from "./srs"
@@ -49,7 +50,14 @@ export function isCorrect(q: Question, picks: number[]) {
 export function recordQuestion(q: Question, picks: number[], conf: Confidence, sec: number, detail: AttemptDetail = {}) {
   const correct = isCorrect(q, picks)
   const prev = getState().srsq[q.id]
-  const grade = questionGrade(correct, conf)
+  // Speed relative to the reading time this question needs.
+  const reading = readingSec(q)
+  const grade = questionGrade(correct, conf, {
+    changed: !!detail.changes,
+    rapid: isRapid(q, sec * 1000),
+    slow: sec > Math.max(90, reading * 3),
+    quick: sec < Math.max(8, reading * 1.3),
+  })
   const base = schedule(prev, grade, "q", cap())
   const rec: QRec = {
     ...base,

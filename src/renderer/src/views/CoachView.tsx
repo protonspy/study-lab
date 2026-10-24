@@ -259,9 +259,25 @@ function PlanTab() {
               </div>
             </div>
             <Textarea rows={3} value={instructions} onChange={(e) => setInstructions(e.target.value)} placeholder="Anything to respect? e.g. no study on Sundays, mock exam every Saturday, focus on D3." />
-            <Button onClick={make} disabled={running} className="w-fit">
-              {running ? <Loader2 className="animate-spin" /> : <Sparkles />} {active ? "Replan with the coach" : "Plan with the coach"}
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button onClick={make} disabled={running}>
+                {running ? <Loader2 className="animate-spin" /> : <Sparkles />} {active ? "Replan with the coach" : "Plan with the coach"}
+              </Button>
+              <Button
+                variant="outline"
+                disabled={running}
+                onClick={async () => {
+                  await api().autoPlan(LAB!.id, Number(days) || 7, Number(minutes) || undefined)
+                  setPlans(await api().plans(LAB!.id))
+                  toast.success("Plan computed from your learner model")
+                }}
+              >
+                <CalendarRange /> Plan without AI
+              </Button>
+            </div>
+            <p className="text-xs text-ink-3">
+              Both start from the same deterministic schedule (spaced reviews, retests, mock exams, highest-priority concepts). The coach adds explanations and adjusts within limits.
+            </p>
             <JobStrip kinds={["plan"]} />
           </CardContent>
         </Card>

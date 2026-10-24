@@ -16,6 +16,7 @@ import { deleteConnection, listConnections, saveConnection, testConnection } fro
 import { deleteSkill, listSkills, saveSkill } from "./harness/skills"
 import { chat, currentModel, initKey, keyHint, listModels, readKey, saveKey } from "./openrouter"
 import * as repo from "./repo"
+import { labLearner, labPlan, plannerPlan } from "./learner"
 
 let win: BrowserWindow | null = null
 let dbPath = ""
@@ -150,6 +151,17 @@ const api: Api = {
   insights: async (labId) => repo.listInsights(labId),
   deleteInsight: async (labId, id) => repo.deleteInsight(labId, id),
   plans: async (labId) => repo.listPlans(labId),
+  autoPlan: async (labId, days, minutesPerDay) => {
+    const plan = plannerPlan(labId, days ?? 7, minutesPerDay)
+    for (const other of repo.listPlans(labId)) if (other.status === "active") repo.savePlan(labId, { ...other, status: "archived" })
+    repo.savePlan(labId, plan)
+    emit({ type: "lab-changed", labId, what: ["plans"] })
+    return plan
+  },
+  learner: async (labId) => {
+    const m = labLearner(labId)
+    return { kcs: m.kcs, predicted: m.predicted, calibration: m.calibration, errors: m.errors, rapidRate: m.rapidRate, topicLevel: m.topicLevel, priorities: labPlan(labId, { days: 1 }).priorities }
+  },
   setTaskDone: async (labId, planId, taskId, done) => {
     const p = repo.getPlan(labId, planId)
     if (!p) throw new Error("That plan is gone.")

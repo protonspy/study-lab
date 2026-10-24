@@ -1,10 +1,9 @@
+import { scheduleFsrs } from "@shared/fsrs"
 import type { Confidence, SrsRec } from "./types"
 
 /**
- * SM-2 style scheduler (the algorithm behind Anki), with two changes for exam prep:
- * - intervals are capped so every item comes back at least once before the exam date;
- * - questions never repeat inside the same day (re-reading an answer minutes later only
- *   tests short-term memory), while flashcards relearn after 10 minutes.
+ * Scheduling is FSRS-6 (shared/fsrs.ts). Intervals are capped so every item comes back before the
+ * exam date, and questions never repeat inside the same day.
  */
 export type Grade = 1 | 2 | 3 | 4
 export type ItemKind = "c" | "q"
@@ -39,33 +38,7 @@ export function capFromExam(examDate: string | null): number | null {
 }
 
 export function schedule(prev: SrsRec | undefined, grade: Grade, kind: ItemKind, capDays: number | null, fuzz = true): SrsRec {
-  const now = nowMin()
-  const rec: SrsRec = prev ? { ...prev } : { d: 0, i: 0, e: 250, r: 0, l: 0, s: 0, t: 0 }
-  rec.s = (rec.s || 0) + 1
-  let ivl: number
-  if (grade === 1) {
-    if (rec.r > 0) rec.l = (rec.l || 0) + 1
-    rec.r = 0
-    rec.e = Math.max(130, rec.e - 20)
-    ivl = kind === "q" ? 1 : 10 / 1440
-  } else {
-    const ease = rec.e / 100
-    if (rec.r === 0) ivl = grade === 2 ? (kind === "q" ? 1 : 0.5) : grade === 3 ? 1 : 3
-    else if (rec.r === 1) ivl = grade === 2 ? 2 : grade === 3 ? 3 : 5
-    else if (grade === 2) ivl = Math.max(1, rec.i * 1.2)
-    else if (grade === 3) ivl = Math.max(rec.i + 1, rec.i * ease)
-    else ivl = Math.max(rec.i + 2, rec.i * ease * 1.3)
-    if (grade === 2) rec.e = Math.max(130, rec.e - 15)
-    if (grade === 4) rec.e = Math.min(320, rec.e + 15)
-    rec.r += 1
-  }
-  if (fuzz && ivl >= 3) ivl *= 0.95 + Math.random() * 0.1
-  if (capDays != null && ivl > capDays) ivl = capDays
-  rec.i = Math.round(ivl * 100) / 100
-  rec.d = now + Math.round(ivl * 1440)
-  rec.g = grade
-  rec.t = now
-  return rec
+  return scheduleFsrs(prev, grade, kind, capDays, fuzz)
 }
 
 export function fmtIvl(days: number): string {
@@ -80,10 +53,15 @@ export function previewIntervals(prev: SrsRec | undefined, kind: ItemKind, capDa
   return ([1, 2, 3, 4] as Grade[]).map((g) => fmtIvl(schedule(prev, g, kind, capDays, false).i))
 }
 
-/** Grade a question from correctness and stated confidence. */
-export function questionGrade(correct: boolean, conf: Confidence): Grade {
+/**
+ * Grade a question for FSRS. A right answer that was guessed, changed, rushed or slow is Hard (known,
+ * not yet fluent); "unsure" is Good; "sure" is Good, or Easy when it was also quick.
+ */
+export function questionGrade(correct: boolean, conf: Confidence, how: { changed?: boolean; rapid?: boolean; slow?: boolean; quick?: boolean } = {}): Grade {
   if (!correct) return 1
-  return conf === 2 ? 3 : 2
+  if (conf === 0 || how.changed || how.rapid || how.slow) return 2
+  if (conf === 1) return 3
+  return how.quick ? 4 : 3
 }
 
 export function isDue(rec: SrsRec | undefined, horizon = endOfDayMin()): boolean {

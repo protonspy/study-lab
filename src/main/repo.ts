@@ -26,6 +26,7 @@ import type {
   Topic,
 } from "@shared/types"
 import { all, one, run, tx } from "./db"
+import { readGraph } from "./graph"
 
 export const newId = (prefix = "") => `${prefix}${randomUUID().replace(/-/g, "").slice(0, 12)}`
 
@@ -248,7 +249,12 @@ export function readContent(labId: string): LabContent {
   const questions = all<QRow>("SELECT * FROM questions WHERE lab_id = ? ORDER BY ord, rowid", labId).map(toQuestion)
   const topics = all<{ id: string; d: number; title: string; data: string }>("SELECT id, d, title, data FROM topics WHERE lab_id = ? ORDER BY ord, rowid", labId).map(toTopic)
   const cards = all<CRow>("SELECT * FROM cards WHERE lab_id = ? ORDER BY ord, rowid", labId).map(toCard)
-  return { questions, kb: { topics, cards, tags: getTags(labId), conflicts: json(r.conflicts, []), builtAt: r.built_at } }
+  const kb = { topics, cards, tags: getTags(labId), conflicts: json(r.conflicts, []), builtAt: r.built_at }
+  return { questions, kb, graph: readGraph(labId) }
+}
+
+export function readTopics(labId: string): Topic[] {
+  return all<{ id: string; d: number; title: string; data: string }>("SELECT id, d, title, data FROM topics WHERE lab_id = ? ORDER BY ord, rowid", labId).map(toTopic)
 }
 
 export function getQuestion(labId: string, id: string): Question | null {

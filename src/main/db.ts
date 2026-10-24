@@ -201,6 +201,69 @@ const MIGRATIONS: string[] = [
   ALTER TABLE lectures ADD COLUMN kind TEXT NOT NULL DEFAULT 'lecture';
   ALTER TABLE questions ADD COLUMN source_id TEXT;
   `,
+  // v3: knowledge graph (chunks with evidence, knowledge components, typed edges, Q-matrix)
+  `
+  CREATE TABLE chunks (
+    lab_id TEXT NOT NULL REFERENCES labs(id) ON DELETE CASCADE,
+    id TEXT NOT NULL,
+    lecture_n INTEGER NOT NULL,
+    ord INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    embedding BLOB,
+    PRIMARY KEY (lab_id, id)
+  );
+  CREATE INDEX chunks_lecture ON chunks(lab_id, lecture_n, ord);
+
+  CREATE TABLE kcs (
+    lab_id TEXT NOT NULL REFERENCES labs(id) ON DELETE CASCADE,
+    id TEXT NOT NULL,
+    topic_id TEXT,
+    name TEXT NOT NULL,
+    definition TEXT NOT NULL DEFAULT '',
+    kind TEXT NOT NULL DEFAULT 'concept',
+    status TEXT NOT NULL DEFAULT 'active',
+    merged_into TEXT,
+    first_lecture INTEGER,
+    evidence TEXT NOT NULL DEFAULT '[]',
+    embedding BLOB,
+    created INTEGER NOT NULL,
+    PRIMARY KEY (lab_id, id)
+  );
+
+  CREATE TABLE edges (
+    lab_id TEXT NOT NULL REFERENCES labs(id) ON DELETE CASCADE,
+    src TEXT NOT NULL,
+    dst TEXT NOT NULL,
+    type TEXT NOT NULL,
+    weight REAL NOT NULL DEFAULT 1,
+    method TEXT NOT NULL,
+    evidence TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'accepted',
+    created INTEGER NOT NULL,
+    PRIMARY KEY (lab_id, src, dst, type)
+  );
+
+  CREATE TABLE item_kc (
+    lab_id TEXT NOT NULL REFERENCES labs(id) ON DELETE CASCADE,
+    item_kind TEXT NOT NULL,
+    item_id TEXT NOT NULL,
+    kc_id TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'primary',
+    conf REAL NOT NULL DEFAULT 1,
+    method TEXT NOT NULL DEFAULT 'llm',
+    verified INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (lab_id, item_kind, item_id, kc_id)
+  );
+  CREATE INDEX item_kc_kc ON item_kc(lab_id, kc_id);
+
+  CREATE TABLE option_kc (
+    lab_id TEXT NOT NULL REFERENCES labs(id) ON DELETE CASCADE,
+    qid TEXT NOT NULL,
+    option INTEGER NOT NULL,
+    kc_id TEXT NOT NULL,
+    PRIMARY KEY (lab_id, qid, option)
+  );
+  `,
 ]
 
 let db: DatabaseSync | null = null

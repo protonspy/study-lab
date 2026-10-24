@@ -25,6 +25,17 @@ import type {
   StudyPlan,
 } from "./types"
 
+/** The learner model as the renderer needs it (maps flattened to arrays). */
+export interface LearnerView {
+  kcs: import("./learner").KcState[]
+  predicted: import("./learner").LearnerModel["predicted"]
+  calibration: import("./learner").LearnerModel["calibration"]
+  errors: import("./learner").LearnerModel["errors"]
+  rapidRate: number | null
+  topicLevel: boolean
+  priorities: import("./planner").KcPriority[]
+}
+
 export interface LectureHit {
   n: number
   title: string
@@ -153,6 +164,9 @@ export interface Api {
   insights(labId: string): Promise<InsightReport[]>
   deleteInsight(labId: string, id: string): Promise<void>
   plans(labId: string): Promise<StudyPlan[]>
+  /** a plan straight from the deterministic planner, no LLM */
+  autoPlan(labId: string, days?: number, minutesPerDay?: number): Promise<StudyPlan>
+  learner(labId: string): Promise<LearnerView>
   setTaskDone(labId: string, planId: string, taskId: string, done: boolean): Promise<StudyPlan>
   setPlanStatus(labId: string, planId: string, status: StudyPlan["status"]): Promise<void>
   threads(labId: string): Promise<ChatThread[]>
@@ -213,6 +227,8 @@ export const API_METHODS = [
   "insights",
   "deleteInsight",
   "plans",
+  "autoPlan",
+  "learner",
   "setTaskDone",
   "setPlanStatus",
   "threads",

@@ -46,7 +46,12 @@ export function startTask(task: PlanTask) {
       if (topics.length) return run(task.title, interleave(topics.map((t) => buildDaily(s, { topic: t })), n), "coach")
       return go("review")
     case "practice": {
-      const items = topics.length ? interleave(topics.map((t) => questionSprint(s, n, { topic: t })), n) : questionSprint(s, n)
+      const kcs = (task.kcs ?? []).filter((k) => data().kcById.has(k))
+      const items = kcs.length
+        ? interleave(kcs.map((k) => questionSprint(s, n, { kcs: [k] })), n)
+        : topics.length
+          ? interleave(topics.map((t) => questionSprint(s, n, { topic: t })), n)
+          : questionSprint(s, n)
       return run(task.title, items, "coach")
     }
     case "cards":

@@ -98,6 +98,47 @@ export interface Lecture {
   p: string[]
 }
 
+/* ---------- knowledge graph ---------- */
+
+/** A knowledge component: one fact, concept or procedure that can be tested on its own. */
+export interface Kc {
+  id: string
+  /** topic it belongs to (topics group KCs; domains group topics) */
+  topic: string | null
+  name: string
+  definition: string
+  kind: "fact" | "concept" | "procedure" | "comparison"
+  status: "active" | "deprecated"
+  /** first lecture that teaches it (course order is a weak prerequisite signal) */
+  firstLecture?: number
+  /** chunk ids that support it */
+  evidence: string[]
+}
+
+export type EdgeType = "prerequisite" | "confusable" | "related" | "example_of"
+
+export interface GraphEdge {
+  src: string
+  dst: string
+  type: EdgeType
+  weight: number
+  /** how it was inferred: llm, order, refd, distractor, embedding, learner, manual… */
+  method: string
+  evidence: string
+  status: "accepted" | "candidate" | "rejected"
+}
+
+export interface KnowledgeGraph {
+  kcs: Kc[]
+  edges: GraphEdge[]
+  /** question id → knowledge components it tests */
+  itemKc: Record<string, { kc: string; role: "primary" | "secondary" }[]>
+  /** question id → option index → the KC a wrong option describes */
+  optionKc: Record<string, Record<number, string>>
+  /** true when the lab has no KCs yet and topics stand in for them */
+  topicLevel: boolean
+}
+
 /* ---------- labs ---------- */
 
 export interface Domain {
@@ -161,6 +202,7 @@ export interface LabInfo {
 export interface LabContent {
   questions: Question[]
   kb: KB
+  graph: KnowledgeGraph
 }
 
 /* ---------- progress ---------- */
@@ -183,6 +225,8 @@ export interface SrsRec {
   g?: number
   /** last review */
   t: number
+  /** FSRS state: stability (days), difficulty (1–10), card state, learning step, last review (epoch ms) */
+  fs?: { s: number; df: number; st: number; ls: number; lr: number }
 }
 
 export interface QRec extends SrsRec {
@@ -414,6 +458,10 @@ export interface PlanTask {
   type: PlanTaskType
   title: string
   topics: string[]
+  /** knowledge components the task targets (finer than topics) */
+  kcs?: string[]
+  /** why the planner scheduled it: due_review, exam_risk, retest, misconception, confusable, gap, prereq_unlock, mock */
+  reason?: string
   count?: number
   minutes: number
   why: string

@@ -149,6 +149,8 @@ export interface QueueItem {
 export interface QueueFilter {
   domain?: number
   topic?: string
+  /** knowledge components: questions testing any of them */
+  kcs?: string[]
 }
 
 function matchesCard(c: Card, f: QueueFilter) {
@@ -161,6 +163,7 @@ function matchesCard(c: Card, f: QueueFilter) {
 }
 
 function matchesQ(q: Question, f: QueueFilter) {
+  if (f.kcs?.length && !(data().graph.itemKc[q.id] ?? []).some((k) => f.kcs!.includes(k.kc))) return false
   if (f.domain && q.d !== f.domain) return false
   if (f.topic && !(data().kb.tags[q.id] ?? []).includes(f.topic)) return false
   return true
@@ -198,7 +201,7 @@ function pickNewCards(s: AppState, f: QueueFilter, limit: number): Card[] {
 function pickNewQuestions(s: AppState, f: QueueFilter, limit: number): Question[] {
   if (limit <= 0) return []
   const fresh = data().questions.filter((q) => !s.srsq[q.id] && matchesQ(q, f))
-  if (f.domain || f.topic) return shuffled(fresh).slice(0, limit)
+  if (f.domain || f.topic || f.kcs?.length) return shuffled(fresh).slice(0, limit)
   const byD = new Map<number, Question[]>()
   for (const q of shuffled(fresh)) {
     if (!byD.has(q.d)) byD.set(q.d, [])

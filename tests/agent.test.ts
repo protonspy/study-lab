@@ -38,6 +38,8 @@ before(async () => {
   labId = repo.createLab({ name: "Cloud", preset: "certification" }).id
   await importUdemy(labId, [join(fixtures, "sample-simulados.md"), join(fixtures, "sample-transcricoes.md")])
   globalThis.fetch = scripted = (async (url: string, init?: RequestInit) => {
+    // No embedding model in tests: the builder falls back to local lexical vectors.
+    if (String(url).endsWith("/embeddings")) return new Response("{}", { status: 404 })
     if (String(url).endsWith("/models"))
       return new Response(JSON.stringify({ data: [{ id: DEFAULT_MODEL, name: "DeepSeek", context_length: 1e6, pricing: { prompt: "0.00000015", completion: "0.0000006" }, supported_parameters: ["tools", "response_format"] }] }))
     const body = JSON.parse(String(init?.body))
@@ -67,9 +69,20 @@ beforeEach(() => {
 })
 
 describe("knowledge base builder", () => {
-  it("outlines topics, writes notes and cards, and tags questions", async () => {
+  it("builds a concept graph: chunks, concepts, topics, Q-matrix with distractors, grounded notes", async () => {
     const qs = repo.readContent(labId).questions
+    const card = (front: string, chunk: string) => ({ front, back: "b", kind: "concept", chunk })
+    const notes = { summary: ["S"], keyPoints: ["K"], examTips: [], pitfalls: [], mnemonics: [], cards: [card("Bucket?", "3:0"), card("At rest?", "4:0")] }
     script = [
+      {
+        content: JSON.stringify({
+          concepts: [
+            { name: "Object storage", definition: "Files kept as objects in buckets, durable and shared.", kind: "concept", chunks: ["3:0"], relies_on: [] },
+            { name: "Encryption at rest", definition: "Protects data on disks and snapshots if media is stolen.", kind: "concept", chunks: ["4:0", "9:9"], relies_on: [] },
+            { name: "Course welcome", definition: "Intro.", kind: "fact", chunks: ["1:0"] },
+          ],
+        }),
+      },
       {
         content: JSON.stringify({
           domains: [
@@ -77,26 +90,54 @@ describe("knowledge base builder", () => {
             { n: 2, name: "Security", short: "Security", w: 40 },
           ],
           topics: [
-            { id: "object-storage", title: "Object storage", domain: 1, covers: "Buckets", lectures: [3] },
-            { id: "encryption", title: "Encryption", domain: 2, covers: "At rest", lectures: [4, 999] },
+            { id: "storage", title: "Storage", domain: 1, covers: "Buckets" },
+            { id: "security", title: "Security", domain: 2, covers: "Encryption" },
+          ],
+          assign: [
+            { kc: "kc-object-storage", topic: "storage" },
+            { kc: "kc-encryption-at-rest", topic: "security" },
           ],
         }),
       },
-      { content: '```json\n{"summary":["S"],"keyPoints":["Objects live in buckets"],"examTips":[],"pitfalls":[],"mnemonics":[],"confusable":["encryption"],"cards":[{"front":"Bucket?","back":"Container","kind":"concept"}]}\n```' },
-      { content: JSON.stringify({ summary: ["E"], keyPoints: ["At rest protects disks"], examTips: [], pitfalls: [], mnemonics: [], confusable: [], cards: [{ front: "At rest?", back: "Disks", kind: "fact" }] }) },
-      { content: JSON.stringify({ assignments: [{ qid: qs[0].id, topics: ["object-storage"] }, { qid: qs[1].id, topics: ["encryption", "bogus"] }, { qid: qs[2].id, topics: ["encryption"] }] }) },
+      {
+        content: JSON.stringify({
+          items: [
+            { qid: qs[0].id, primary: "kc-object-storage", distractors: { "0": "kc-encryption-at-rest" }, confidence: 0.9 },
+            { qid: qs[1].id, primary: "kc-encryption-at-rest", confidence: 0.6 },
+            { qid: qs[2].id, primary: "kc-encryption-at-rest", distractors: { "1": "kc-object-storage", "0": "kc-object-storage" }, confidence: 0.9 },
+          ],
+        }),
+      },
+      { content: JSON.stringify(notes) },
+      { content: JSON.stringify(notes) },
     ]
-    await runBuildKb(labId, job(), { cardsPerTopic: 3 })
+    await runBuildKb(labId, job(), { cardsPerTopic: 3, keep: false })
     const c = repo.readContent(labId)
-    assert.equal(c.kb.topics.length, 2)
+    const g = c.graph
+    assert.equal(g.topicLevel, false)
+    assert.ok(g.kcs.some((k) => k.id === "kc-object-storage" && k.topic === "storage" && k.evidence.includes("3:0")))
+    assert.deepEqual(g.kcs.find((k) => k.id === "kc-encryption-at-rest")!.evidence, ["4:0"], "unknown chunk ids are dropped")
     assert.deepEqual(repo.getConfig(labId).domains.map((d) => d.name), ["Storage", "Security"])
-    assert.deepEqual(c.kb.topics.find((t) => t.id === "encryption")!.lectures, [4])
-    assert.equal(c.kb.cards.length, 2)
-    assert.deepEqual(c.kb.tags[qs[1].id], ["encryption"])
+    // Q-matrix and distractors; the correct option is never tagged as a distractor.
+    assert.equal(g.itemKc[qs[0].id][0].kc, "kc-object-storage")
+    assert.deepEqual(g.optionKc[qs[2].id], { 1: "kc-object-storage" })
+    const conf = g.edges.find((e) => e.type === "confusable")!
+    assert.equal(conf.method, "distractor")
+    assert.equal(conf.weight, 2)
+    // Topic tags and domains follow the concepts, so older views keep working.
+    assert.deepEqual(c.kb.tags[qs[2].id], ["security"])
     assert.equal(c.questions.find((q) => q.id === qs[2].id)!.d, 2)
-    assert.equal(requests.length, 4)
-    assert.ok(requests[0].response_format, "outline asks for structured output")
-    assert.match(repo.listChanges(labId)[0].summary, /Built the knowledge base/)
+    // Grounding: each topic keeps only the card citing its own chunk.
+    assert.deepEqual(c.kb.cards.map((x) => [x.t, x.f]).sort(), [["security", "At rest?"], ["storage", "Bucket?"]])
+    assert.match(repo.listChanges(labId)[0].summary, /knowledge graph/)
+    assert.equal(requests.length, 5)
+  })
+
+  it("breaks prerequisite cycles at their weakest edge", async () => {
+    const { breakCycles } = await import("../src/main/buildkb")
+    const e = (src: string, dst: string, weight: number) => ({ src, dst, type: "prerequisite" as const, weight, method: "t", evidence: "", status: "accepted" as const })
+    const out = breakCycles([e("a", "b", 0.9), e("b", "c", 0.8), e("c", "a", 0.6), e("a", "c", 0.7)])
+    assert.deepEqual(out.map((x) => `${x.src}${x.dst}`).sort(), ["ab", "ac", "bc"])
   })
 })
 
@@ -145,12 +186,12 @@ describe("coach jobs", () => {
 
   it("plans: pins focus topics and saves a day-by-day plan", async () => {
     script = [
-      { tool_calls: [{ name: "set_focus", args: { topics: ["object-storage"] } }] },
+      { tool_calls: [{ name: "set_focus", args: { topics: ["storage"] } }] },
       {
         tool_calls: [
           {
             name: "save_study_plan",
-            args: { title: "Fix storage", goal: "Stop the repeated miss", rationale: "From the report", days: [{ focus: "Storage", tasks: [{ type: "practice", title: "Drill", topics: ["object-storage"], minutes: 20 }] }] },
+            args: { title: "Fix storage", goal: "Stop the repeated miss", rationale: "From the report", days: [{ focus: "Storage", tasks: [{ type: "practice", title: "Drill", topics: ["storage"], minutes: 20 }] }] },
           },
         ],
       },
@@ -158,13 +199,13 @@ describe("coach jobs", () => {
     ]
     await runPlan(labId, job(), { days: 1, minutesPerDay: 30 })
     assert.equal(repo.activePlan(labId)!.title, "Fix storage")
-    assert.deepEqual(repo.getConfig(labId).focus, ["object-storage"])
+    assert.deepEqual(repo.getConfig(labId).focus, ["storage"])
     assert.match(requests[0].messages[1].content!, /Latest analysis/)
   })
 
   it("chats, keeps tool history valid across turns, and reports tool errors to the model", async () => {
     const thread = repo.createThread(labId, "Help").id
-    script = [{ tool_calls: [{ name: "create_flashcards", args: { topic_id: "nope", cards: [] } }] }, { tool_calls: [{ name: "create_flashcards", args: { topic_id: "encryption", cards: [{ front: "KMS?", back: "Keys" }] } }] }, { content: "Added one card." }]
+    script = [{ tool_calls: [{ name: "create_flashcards", args: { topic_id: "nope", cards: [] } }] }, { tool_calls: [{ name: "create_flashcards", args: { topic_id: "security", cards: [{ front: "KMS?", back: "Keys" }] } }] }, { content: "Added one card." }]
     await runChat(labId, thread, "Add a card about keys", job())
     const msgs = repo.listMessages(thread)
     assert.deepEqual(msgs.map((m) => m.role), ["user", "assistant"])

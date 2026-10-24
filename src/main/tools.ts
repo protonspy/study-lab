@@ -1,5 +1,7 @@
 import { dayKey } from "@shared/analytics"
-import type { Card, CardKind, Collection, ItemStatus, PlanDay, PlanTask, PlanTaskType, Question, StudyPlan, Topic } from "@shared/types"
+import type { Card, CardKind, Collection, EdgeType, ItemStatus, PlanDay, PlanTask, PlanTaskType, Question, StudyPlan, Topic } from "@shared/types"
+import * as graph from "./graph"
+import { labLearner, labPlan } from "./learner"
 import { all, tx } from "./db"
 import { Change } from "./journal"
 import * as repo from "./repo"
@@ -138,7 +140,52 @@ const readTools: Tool[] = [
         forgotten: s.forgotten.slice(0, 10),
         mistakeReasons: s.reasons,
         accuracyByHour: s.byHour,
+        learnerModel: modelSummary(ctx.labId),
       }
+    },
+  },
+  {
+    name: "get_graph",
+    description:
+      "The knowledge graph: knowledge components (concepts) with topic, mastery +- uncertainty, readiness, items and error types, plus prerequisite / confusable / related edges. Filter by topic to keep it small.",
+    schema: { type: "object", properties: { topic_id: { type: "string" }, edge_types: { type: "array", items: { type: "string", enum: ["prerequisite", "confusable", "related", "example_of"] } } } },
+    write: false,
+    run(ctx, a) {
+      const g = graph.readGraph(ctx.labId)
+      const m = labLearner(ctx.labId)
+      const topic = str(a.topic_id, 80)
+      const kcs = g.kcs.filter((k) => !topic || k.topic === topic)
+      const ids = new Set(kcs.map((k) => k.id))
+      const types = strs(a.edge_types, 4)
+      return {
+        topicLevel: g.topicLevel,
+        concepts: kcs.slice(0, 250).map((k) => {
+          const st = m.byId.get(k.id)
+          return {
+            id: k.id,
+            name: k.name,
+            topic: k.topic,
+            definition: clip(k.definition, 160),
+            mastery: st ? Math.round(st.mastery * 100) / 100 : null,
+            sd: st ? Math.round(st.sd * 100) / 100 : null,
+            readiness: st ? Math.round(st.readiness * 100) / 100 : null,
+            items: st?.items ?? 0,
+            errors: st?.errors,
+          }
+        }),
+        edges: g.edges.filter((e) => (ids.has(e.src) || ids.has(e.dst)) && (!types.length || types.includes(e.type))).slice(0, 400),
+      }
+    },
+  },
+  {
+    name: "compute_plan",
+    description:
+      "Run the deterministic planner: per day, FSRS reviews, exam-day protection, retests of confident errors, mock exams and remediation of the highest-priority concepts within the daily minutes. Returns days of tasks with reason codes and the concept priorities. Use it before save_study_plan.",
+    schema: { type: "object", properties: { days: { type: "number" }, minutes_per_day: { type: "number" } } },
+    write: false,
+    run(ctx, a) {
+      const p = labPlan(ctx.labId, { days: num(a.days, 7, 1, 30), minutesPerDay: a.minutes_per_day != null ? num(a.minutes_per_day, 45, 10, 480) : undefined })
+      return { start: p.start, days: p.days, priorities: p.priorities.slice(0, 15), notes: p.notes }
     },
   },
   {
@@ -310,6 +357,21 @@ function countStates(xs: string[]) {
   const out: Record<string, number> = {}
   for (const x of xs) out[x] = (out[x] ?? 0) + 1
   return out
+}
+
+function modelSummary(labId: string) {
+  const m = labLearner(labId)
+  const weak = [...m.kcs].filter((k) => k.items > 0).sort((a, b) => a.mastery - b.mastery).slice(0, 8)
+  return {
+    level: m.topicLevel ? "topics (no concept graph yet)" : "knowledge components",
+    predictedExam: m.predicted,
+    calibration: m.calibration,
+    errorTypes: m.errors,
+    rapidGuessRate: m.rapidRate,
+    weakestConcepts: weak.map((k) => ({ id: k.id, name: k.name, mastery: Math.round(k.mastery * 100) / 100, sd: Math.round(k.sd * 100) / 100, attempts: k.attempts, readiness: Math.round(k.readiness * 100) / 100 })),
+    activeMisconceptions: m.kcs.flatMap((k) => k.misconceptions.map((x) => ({ concept: k.name, ...x }))).slice(0, 10),
+    pendingRetests: m.kcs.filter((k) => k.pendingRetest).map((k) => k.name).slice(0, 10),
+  }
 }
 
 function mistakes(labId: string, topic: string | undefined, limit: number) {
@@ -728,6 +790,126 @@ const writeTools: Tool[] = [
     },
   },
   {
+    name: "upsert_concept",
+    description: "Create or update a knowledge component (concept) under a topic: one fact, concept or procedure that can be tested on its own. Omit id to create.",
+    schema: {
+      type: "object",
+      properties: {
+        id: { type: "string" },
+        name: { type: "string" },
+        definition: { type: "string" },
+        topic_id: { type: "string" },
+        kind: { type: "string", enum: ["fact", "concept", "procedure", "comparison"] },
+      },
+      required: ["name"],
+    },
+    write: true,
+    run(ctx, a) {
+      if (!graph.hasKcs(ctx.labId) && !a.id) throw new Error("This lab has no concept graph yet. Build the knowledge base first (Content > Build with the coach); until then topics act as concepts.")
+      const existing = a.id ? graph.getKc(ctx.labId, str(a.id, 80)) : null
+      const topic = a.topic_id ? requireTopic(ctx.labId, a.topic_id).id : (existing?.topic ?? null)
+      const id = existing?.id ?? `kc-${slug(str(a.name, 60))}`
+      if (!existing && graph.getKc(ctx.labId, id)) throw new Error(`Concept ${id} already exists; pass its id to update it.`)
+      const ch = new Change(ctx.labId, ctx.actor, "upsert_concept")
+      ch.kc(id)
+      graph.upsertKc(ctx.labId, {
+        id,
+        topic,
+        name: str(a.name, 120) || existing?.name || id,
+        definition: typeof a.definition === "string" ? str(a.definition, 600) : (existing?.definition ?? ""),
+        kind: (["fact", "concept", "procedure", "comparison"].includes(String(a.kind)) ? a.kind : (existing?.kind ?? "concept")) as "concept",
+        status: "active",
+        firstLecture: existing?.firstLecture,
+        evidence: existing?.evidence ?? [],
+      })
+      return { id, change: changed(ctx, ch, `${existing ? "Updated" : "Created"} concept ${str(a.name, 80)}`) }
+    },
+  },
+  {
+    name: "set_relation",
+    description:
+      "Add or remove an edge between two concepts: prerequisite (src must be understood before dst), confusable (learners mix them up), related, example_of. The prerequisite graph must stay acyclic.",
+    schema: {
+      type: "object",
+      properties: {
+        src: { type: "string" },
+        dst: { type: "string" },
+        type: { type: "string", enum: ["prerequisite", "confusable", "related", "example_of"] },
+        action: { type: "string", enum: ["add", "remove"] },
+        reason: { type: "string" },
+      },
+      required: ["src", "dst", "type", "action", "reason"],
+    },
+    write: true,
+    run(ctx, a) {
+      const g = graph.readGraph(ctx.labId)
+      const ids = new Set(g.kcs.map((k) => k.id))
+      const src = str(a.src, 80)
+      const dst = str(a.dst, 80)
+      const type = a.type as EdgeType
+      if (g.topicLevel) throw new Error("Relations need the concept graph. Build the knowledge base first.")
+      if (!ids.has(src) || !ids.has(dst) || src === dst) throw new Error("Both ends must be existing, different concepts (see get_graph).")
+      if (a.action === "add" && type === "prerequisite" && reaches(g.edges, dst, src)) throw new Error(`That would create a cycle: ${dst} already leads to ${src}.`)
+      const ch = new Change(ctx.labId, ctx.actor, "set_relation")
+      ch.edge(src, dst, type)
+      if (a.action === "remove") graph.deleteEdge(ctx.labId, src, dst, type)
+      else graph.setEdge(ctx.labId, { src, dst, type, weight: 1, method: "manual", evidence: str(a.reason, 400), status: "accepted" })
+      return { change: changed(ctx, ch, `${a.action === "remove" ? "Removed" : "Added"} ${type}: ${src} -> ${dst} (${str(a.reason, 120)})`) }
+    },
+  },
+  {
+    name: "tag_concepts",
+    description:
+      "Set which concepts a question tests (primary first) and, optionally, which concept each wrong option describes (distractor -> concept). Distractor tags let the app tell a misconception from a slip.",
+    schema: {
+      type: "object",
+      properties: {
+        assignments: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              qid: { type: "string" },
+              primary: { type: "string" },
+              secondary: { type: "array", items: { type: "string" } },
+              distractors: { type: "object", additionalProperties: { type: "string" }, description: "option index (0-based) -> concept id" },
+            },
+            required: ["qid", "primary"],
+          },
+        },
+      },
+      required: ["assignments"],
+    },
+    write: true,
+    run(ctx, a) {
+      if (!graph.hasKcs(ctx.labId)) throw new Error("This lab has no concept graph yet; use tag_questions for topics.")
+      const ids = new Set(graph.readGraph(ctx.labId).kcs.map((k) => k.id))
+      const ch = new Change(ctx.labId, ctx.actor, "tag_concepts")
+      let n = 0
+      for (const raw of (Array.isArray(a.assignments) ? a.assignments : []).slice(0, 300) as Record<string, unknown>[]) {
+        const qid = str(raw.qid, 120)
+        const q = repo.getQuestion(ctx.labId, qid)
+        const primary = str(raw.primary, 80)
+        if (!q || !ids.has(primary)) continue
+        ch.itemKc(qid)
+        const secondary = strs(raw.secondary, 3).filter((x) => ids.has(x) && x !== primary)
+        graph.setItemKcs(ctx.labId, qid, [
+          { kc: primary, role: "primary", conf: 1, method: ctx.actor.startsWith("mcp:") ? "mcp" : "llm" },
+          ...secondary.map((kc) => ({ kc, role: "secondary" as const, conf: 0.8, method: "llm" })),
+        ])
+        const d = (raw.distractors && typeof raw.distractors === "object" ? raw.distractors : {}) as Record<string, unknown>
+        const opts: Record<number, string> = {}
+        for (const [k, v] of Object.entries(d)) {
+          const i = Number(k)
+          if (Number.isInteger(i) && i >= 0 && i < q.opts.length && !q.ans.includes(i) && ids.has(String(v))) opts[i] = String(v)
+        }
+        graph.setOptionKcs(ctx.labId, qid, opts)
+        n++
+      }
+      return { tagged: n, change: changed(ctx, ch, `Tagged ${n} questions with concepts`) }
+    },
+  },
+  {
     name: "save_study_plan",
     description:
       "Save a day-by-day study plan; it replaces the active plan and shows on the Today page. Task types: review (daily SRS mix), practice (questions on topics), cards, cues (exam-cue drill), notes (read topic notes), guide (read a coach guide, ref = guide id), exam (mock exam, count = questions), collection (ref = collection id), mistakes (redo wrong answers), custom.",
@@ -738,6 +920,7 @@ const writeTools: Tool[] = [
         goal: { type: "string" },
         rationale: { type: "string", description: "Why this plan, citing the analytics" },
         start: { type: "string", description: "YYYY-MM-DD, default today" },
+        computed: { type: "boolean", description: "true when the days come from compute_plan; the app then checks your edits stay within the allowed limits" },
         days: {
           type: "array",
           items: {
@@ -756,6 +939,8 @@ const writeTools: Tool[] = [
                     minutes: { type: "number" },
                     why: { type: "string" },
                     ref: { type: "string" },
+                    kcs: { type: "array", items: { type: "string" } },
+                    reason: { type: "string" },
                   },
                   required: ["type", "title", "minutes"],
                 },
@@ -770,6 +955,7 @@ const writeTools: Tool[] = [
     write: true,
     run(ctx, a) {
       const valid = new Set(all<{ id: string }>("SELECT id FROM topics WHERE lab_id = ?", ctx.labId).map((r) => r.id))
+      const kcIds = new Set(graph.readGraph(ctx.labId).kcs.map((k) => k.id))
       const startStr = /^\d{4}-\d{2}-\d{2}$/.test(str(a.start)) ? str(a.start) : dayKey()
       const [y, m, d0] = startStr.split("-").map(Number)
       const days: PlanDay[] = ((Array.isArray(a.days) ? a.days : []) as Record<string, unknown>[]).slice(0, 60).map((d, i) => ({
@@ -785,12 +971,16 @@ const writeTools: Tool[] = [
             minutes: num(t.minutes, 15, 1, 240),
             why: str(t.why, 400),
           }
+          const kcs = strs(t.kcs, 6).filter((x) => kcIds.has(x))
+          if (kcs.length) task.kcs = kcs
+          if (t.reason) task.reason = str(t.reason, 40)
           if (t.count != null) task.count = num(t.count, 10, 1, 200)
           if (t.ref) task.ref = str(t.ref, 80)
           return task
         }),
       }))
       if (!days.length) throw new Error("The plan has no days.")
+      if (a.computed) enforceComputed(ctx.labId, days)
       const ch = new Change(ctx.labId, ctx.actor, "save_study_plan")
       const prev = repo.activePlan(ctx.labId)
       if (prev) {
@@ -925,6 +1115,43 @@ const writeTools: Tool[] = [
     },
   },
 ]
+
+/** Does a path of prerequisite edges lead from a to b? */
+function reaches(edges: { src: string; dst: string; type: string }[], a: string, b: string): boolean {
+  const next = new Map<string, string[]>()
+  for (const e of edges) if (e.type === "prerequisite") next.set(e.src, [...(next.get(e.src) ?? []), e.dst])
+  const seen = new Set<string>()
+  const stack = [a]
+  while (stack.length) {
+    const x = stack.pop()!
+    if (x === b) return true
+    if (seen.has(x)) continue
+    seen.add(x)
+    stack.push(...(next.get(x) ?? []))
+  }
+  return false
+}
+
+/**
+ * The coach may edit a computed plan only within limits: every due review, retest, exam-risk and mock
+ * task the planner scheduled stays, and each day stays within +20% of the planner's minutes.
+ */
+function enforceComputed(labId: string, days: PlanDay[]) {
+  const ref = labPlan(labId, { days: days.length })
+  ref.days.forEach((rd, i) => {
+    const d = days[i]
+    if (!d) return
+    for (const must of rd.tasks.filter((t) => t.reason && ["due_review", "retest", "mock", "exam_risk"].includes(t.reason))) {
+      if (!d.tasks.some((t) => t.reason === must.reason)) d.tasks.unshift({ ...must, id: `${must.id}r` })
+    }
+    const refMin = rd.tasks.reduce((x, t) => x + t.minutes, 0)
+    const total = d.tasks.reduce((x, t) => x + t.minutes, 0)
+    if (refMin && total > refMin * 1.2) {
+      const f = (refMin * 1.2) / total
+      for (const t of d.tasks) t.minutes = Math.max(3, Math.round(t.minutes * f))
+    }
+  })
+}
 
 export const TOOLS: Tool[] = [...readTools, ...writeTools]
 export const TOOL_BY_NAME = new Map(TOOLS.map((t) => [t.name, t]))

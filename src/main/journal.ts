@@ -1,4 +1,5 @@
-import type { Card, LabConfig, Question, Settings, StudyPlan, Topic } from "@shared/types"
+import type { Card, EdgeType, GraphEdge, Kc, LabConfig, Question, Settings, StudyPlan, Topic } from "@shared/types"
+import * as graph from "./graph"
 import { all, one, run, tx } from "./db"
 import * as repo from "./repo"
 
@@ -15,6 +16,9 @@ type Snap =
   | { t: "config"; before: LabConfig }
   | { t: "settings"; before: Settings }
   | { t: "plan"; id: string; before: StudyPlan | null }
+  | { t: "kc"; id: string; before: Kc | null; items: { item_id: string; role: string; conf: number; method: string }[] }
+  | { t: "edge"; src: string; dst: string; type: EdgeType; before: GraphEdge | null }
+  | { t: "itemkc"; qid: string; before: { kc: string; role: string; conf: number; method: string }[]; options: Record<number, string> }
 
 export class Change {
   private snaps: Snap[] = []
@@ -68,6 +72,23 @@ export class Change {
   plan(id: string) {
     this.touched.add("plans")
     if (this.once(`p:${id}`)) this.snaps.push({ t: "plan", id, before: repo.getPlan(this.labId, id) })
+  }
+
+  kc(id: string) {
+    this.touched.add("content")
+    if (!this.once(`k:${id}`)) return
+    const items = all<{ item_id: string; role: string; conf: number; method: string }>("SELECT item_id, role, conf, method FROM item_kc WHERE lab_id = ? AND kc_id = ?", this.labId, id)
+    this.snaps.push({ t: "kc", id, before: graph.getKc(this.labId, id), items })
+  }
+
+  edge(src: string, dst: string, type: EdgeType) {
+    this.touched.add("content")
+    if (this.once(`e:${type}:${graph.edgeKey(src, dst, type).join(">")}`)) this.snaps.push({ t: "edge", src, dst, type, before: graph.getEdge(this.labId, src, dst, type) })
+  }
+
+  itemKc(qid: string) {
+    this.touched.add("content")
+    if (this.once(`ik:${qid}`)) this.snaps.push({ t: "itemkc", qid, before: graph.getItemKcs(this.labId, qid), options: graph.getOptionKcs(this.labId, qid) })
   }
 
   get empty() {
@@ -128,6 +149,23 @@ export function undo(labId: string, id: number): { ok: boolean; error?: string; 
           repo.writeMeta(labId, { ...meta, settings: s.before })
           break
         }
+        case "kc":
+          touched.add("content")
+          if (s.before) {
+            graph.upsertKc(labId, s.before)
+            for (const it of s.items) run("INSERT OR REPLACE INTO item_kc(lab_id, item_kind, item_id, kc_id, role, conf, method) VALUES(?, 'q', ?, ?, ?, ?, ?)", labId, it.item_id, s.id, it.role, it.conf, it.method)
+          } else graph.deleteKc(labId, s.id)
+          break
+        case "edge":
+          touched.add("content")
+          if (s.before) graph.setEdge(labId, s.before)
+          else graph.deleteEdge(labId, s.src, s.dst, s.type)
+          break
+        case "itemkc":
+          touched.add("content")
+          graph.setItemKcs(labId, s.qid, s.before.map((b) => ({ ...b, role: b.role as "primary" | "secondary" })))
+          graph.setOptionKcs(labId, s.qid, s.options)
+          break
         case "plan":
           touched.add("plans")
           if (s.before) repo.savePlan(labId, s.before)

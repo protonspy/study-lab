@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react"
-import type { Card, Domain, ExamConfig, KB, LabContent, LabInfo, Lecture, Question, Topic } from "./types"
+import type { Card, Domain, ExamConfig, KB, KnowledgeGraph, LabContent, LabInfo, Lecture, Question, Topic } from "./types"
 
 /*
   The open lab's content. Domain list, exam format and source labels come from the lab's config,
@@ -40,6 +40,8 @@ export interface Data {
   qByTopic: Map<string, Question[]>
   cardsByTopic: Map<string, Card[]>
   sets: { name: string; src: string; kind: string; count: number }[]
+  graph: KnowledgeGraph
+  kcById: Map<string, KnowledgeGraph["kcs"][number]>
 }
 
 let DATA: Data | null = null
@@ -104,7 +106,23 @@ export function setContent(content: LabContent) {
     s.count++
     setMap.set(q.set, s)
   }
-  DATA = { questions, allQuestions, qById, kb: { ...kb, cards }, cards, allCards, cardById, topics: kb.topics, topicById, qByTopic, cardsByTopic, sets: [...setMap.values()] }
+  const graph = content.graph
+  DATA = {
+    questions,
+    allQuestions,
+    qById,
+    kb: { ...kb, cards },
+    cards,
+    allCards,
+    cardById,
+    topics: kb.topics,
+    topicById,
+    qByTopic,
+    cardsByTopic,
+    sets: [...setMap.values()],
+    graph,
+    kcById: new Map(graph.kcs.map((k) => [k.id, k])),
+  }
   LECTURES = null
   bump()
 }
