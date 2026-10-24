@@ -1,0 +1,432 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/bricolage-grotesque";
+@import "@fontsource/ibm-plex-sans/400.css";
+@import "@fontsource/ibm-plex-sans/400-italic.css";
+@import "@fontsource/ibm-plex-sans/500.css";
+@import "@fontsource/ibm-plex-sans/600.css";
+@import "@fontsource/ibm-plex-mono/400.css";
+@import "@fontsource/ibm-plex-mono/500.css";
+@import "@fontsource/ibm-plex-mono/600.css";
+@import "@fontsource/caveat/500.css";
+@import "@fontsource/caveat/600.css";
+
+/* Dark mode follows the viewer: an explicit data-theme wins, otherwise the OS preference. */
+@custom-variant dark {
+  &:where([data-theme="dark"], [data-theme="dark"] *) {
+    @slot;
+  }
+  @media (prefers-color-scheme: dark) {
+    &:where(:root:not([data-theme="light"]), :root:not([data-theme="light"]) *) {
+      @slot;
+    }
+  }
+}
+
+/*
+  Layout: "study desk" — a quiet rail of tools on the left, one workspace in the middle,
+  index cards and a highlighter for the things worth remembering.
+  Color: blue-black ink on cool paper, highlighter yellow as the only accent,
+  five fixed domain hues (validated for CVD) that always travel with a text label.
+  Type: Bricolage Grotesque for display, IBM Plex Sans for reading, IBM Plex Mono for data,
+  Caveat for hand-written memory hooks.
+*/
+:root {
+  --paper: #f3f5f7;
+  --surface: #ffffff;
+  --surface-2: #e9edf1;
+  --ink: #121a24;
+  --ink-2: #4c5867;
+  --ink-3: #6f7b89;
+  --line: #d6dde5;
+  --marker: #ffe14d;
+  --marker-soft: #fff3a3;
+  --marker-ink: #121a24;
+  --focus: #1f4fd1;
+  --good: #137a3a;
+  --good-bg: #e2f3e7;
+  --bad: #b8321f;
+  --bad-bg: #fbe5e1;
+  --warn: #8f5a00;
+  --warn-bg: #fff1d1;
+  --d1: #2a78d6;
+  --d2: #eb6834;
+  --d3: #1baf7a;
+  --d4: #6250d6;
+  --d5: #e87ba4;
+  --d6: #b8860b;
+  --d7: #0e94ad;
+  --d8: #a0522d;
+  --card-rule: #e0574f;
+  --card-lines: rgba(42, 120, 214, 0.1);
+  --heat-0: #e3e8ed;
+  --heat-1: #cde2fb;
+  --heat-2: #86b6ef;
+  --heat-3: #3987e5;
+  --heat-4: #1c5cab;
+  --on-primary: #f7f9fb;
+
+  --background: var(--paper);
+  --foreground: var(--ink);
+  --card: var(--surface);
+  --card-foreground: var(--ink);
+  --popover: var(--surface);
+  --popover-foreground: var(--ink);
+  --primary: var(--ink);
+  --primary-foreground: var(--on-primary);
+  --secondary: var(--surface-2);
+  --secondary-foreground: var(--ink);
+  --muted: var(--surface-2);
+  --muted-foreground: var(--ink-2);
+  --accent: var(--surface-2);
+  --accent-foreground: var(--ink);
+  --destructive: var(--bad);
+  --border: var(--line);
+  --input: var(--line);
+  --ring: var(--focus);
+  --chart-1: var(--d1);
+  --chart-2: var(--d2);
+  --chart-3: var(--d3);
+  --chart-4: var(--d4);
+  --chart-5: var(--d5);
+  --radius: 0.5rem;
+  --sidebar: var(--surface);
+  --sidebar-foreground: var(--ink);
+  --sidebar-primary: var(--ink);
+  --sidebar-primary-foreground: var(--on-primary);
+  --sidebar-accent: var(--surface-2);
+  --sidebar-accent-foreground: var(--ink);
+  --sidebar-border: var(--line);
+  --sidebar-ring: var(--focus);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #10151c;
+    --surface: #171e27;
+    --surface-2: #212a35;
+    --ink: #e7ecf2;
+    --ink-2: #a9b4c1;
+    --ink-3: #8a95a3;
+    --line: #2c3642;
+    --marker: #e6c23a;
+    --marker-soft: rgba(230, 194, 58, 0.24);
+    --marker-ink: #10151c;
+    --focus: #7ea2ff;
+    --good: #57c784;
+    --good-bg: rgba(87, 199, 132, 0.13);
+    --bad: #ff8e7e;
+    --bad-bg: rgba(255, 142, 126, 0.13);
+    --warn: #f0b94a;
+    --warn-bg: rgba(240, 185, 74, 0.14);
+    --d1: #3987e5;
+    --d2: #d95926;
+    --d3: #199e70;
+    --d4: #9085e9;
+    --d5: #d55181;
+    --d6: #b8890c;
+    --d7: #1ba6c0;
+    --d8: #c0663a;
+    --card-rule: #c2554e;
+    --card-lines: rgba(140, 170, 220, 0.07);
+    --heat-0: #1e2731;
+    --heat-1: #184f95;
+    --heat-2: #256abf;
+    --heat-3: #3987e5;
+    --heat-4: #86b6ef;
+    --on-primary: #10151c;
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --paper: #10151c;
+  --surface: #171e27;
+  --surface-2: #212a35;
+  --ink: #e7ecf2;
+  --ink-2: #a9b4c1;
+  --ink-3: #8a95a3;
+  --line: #2c3642;
+  --marker: #e6c23a;
+  --marker-soft: rgba(230, 194, 58, 0.24);
+  --marker-ink: #10151c;
+  --focus: #7ea2ff;
+  --good: #57c784;
+  --good-bg: rgba(87, 199, 132, 0.13);
+  --bad: #ff8e7e;
+  --bad-bg: rgba(255, 142, 126, 0.13);
+  --warn: #f0b94a;
+  --warn-bg: rgba(240, 185, 74, 0.14);
+  --d1: #3987e5;
+  --d2: #d95926;
+  --d3: #199e70;
+  --d4: #9085e9;
+  --d5: #d55181;
+  --d6: #b8890c;
+  --d7: #1ba6c0;
+  --d8: #c0663a;
+  --card-rule: #c2554e;
+  --card-lines: rgba(140, 170, 220, 0.07);
+  --heat-0: #1e2731;
+  --heat-1: #184f95;
+  --heat-2: #256abf;
+  --heat-3: #3987e5;
+  --heat-4: #86b6ef;
+  --on-primary: #10151c;
+  color-scheme: dark;
+}
+
+@theme inline {
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+  --font-heading: "Bricolage Grotesque Variable", "Bricolage Grotesque", "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+  --font-hand: "Caveat", "Segoe Print", "Bradley Hand", cursive;
+
+  --color-paper: var(--paper);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-line: var(--line);
+  --color-marker: var(--marker);
+  --color-marker-soft: var(--marker-soft);
+  --color-marker-ink: var(--marker-ink);
+  --color-good: var(--good);
+  --color-good-bg: var(--good-bg);
+  --color-bad: var(--bad);
+  --color-bad-bg: var(--bad-bg);
+  --color-warn: var(--warn);
+  --color-warn-bg: var(--warn-bg);
+  --color-d1: var(--d1);
+  --color-d2: var(--d2);
+  --color-d3: var(--d3);
+  --color-d4: var(--d4);
+  --color-d5: var(--d5);
+  --color-d6: var(--d6);
+  --color-d7: var(--d7);
+  --color-d8: var(--d8);
+
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html {
+    @apply font-sans;
+    -webkit-text-size-adjust: 100%;
+  }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-size: 15px;
+    line-height: 1.55;
+  }
+  h1,
+  h2,
+  h3 {
+    font-family: var(--font-heading);
+    text-wrap: balance;
+    letter-spacing: -0.01em;
+  }
+  ::selection {
+    background: var(--marker-soft);
+  }
+}
+
+@layer components {
+  /* The highlighter: a soft band behind text. */
+  .hl {
+    color: inherit;
+    background: var(--marker-soft);
+    border-radius: 0.2em;
+    padding: 0 0.15em;
+    box-decoration-break: clone;
+    -webkit-box-decoration-break: clone;
+  }
+  .hl-strong {
+    color: var(--marker-ink);
+    background: var(--marker);
+    border-radius: 0.2em;
+    padding: 0 0.2em;
+    box-decoration-break: clone;
+    -webkit-box-decoration-break: clone;
+  }
+
+  /* Index card: red header rule, faint blue ruling below it. */
+  .index-card {
+    position: relative;
+    background-color: var(--surface);
+    background-image: repeating-linear-gradient(
+      to bottom,
+      transparent 0,
+      transparent calc(1.9rem - 1px),
+      var(--card-lines) calc(1.9rem - 1px),
+      var(--card-lines) 1.9rem
+    );
+    background-position: 0 3.5rem;
+    border: 1px solid var(--line);
+    border-radius: 0.375rem;
+    box-shadow:
+      0 1px 0 rgba(18, 26, 36, 0.04),
+      0 12px 28px -18px rgba(18, 26, 36, 0.4);
+  }
+  .index-card::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 3.25rem;
+    height: 2px;
+    background: var(--card-rule);
+    opacity: 0.7;
+    pointer-events: none;
+  }
+
+  .hand {
+    font-family: var(--font-hand);
+    font-size: 1.4em;
+    line-height: 1.2;
+  }
+
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+
+  .blur-recall {
+    filter: blur(5px);
+    user-select: none;
+    cursor: pointer;
+  }
+
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
+  .gutter-x {
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Markdown written by the coach */
+.md > * + * {
+  margin-top: 0.7em;
+}
+.md h1,
+.md h2,
+.md h3 {
+  font-family: var(--font-heading);
+  font-weight: 600;
+  line-height: 1.25;
+  margin-top: 1.1em;
+}
+.md h1 {
+  font-size: 1.35rem;
+}
+.md h2 {
+  font-size: 1.18rem;
+}
+.md h3 {
+  font-size: 1.02rem;
+}
+.md ul {
+  list-style: disc;
+  padding-left: 1.3em;
+}
+.md ol {
+  list-style: decimal;
+  padding-left: 1.3em;
+}
+.md li + li {
+  margin-top: 0.25em;
+}
+.md code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  background: var(--surface-2);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+}
+.md pre {
+  background: var(--surface-2);
+  border-radius: 8px;
+  padding: 0.75em 1em;
+  overflow-x: auto;
+}
+.md pre code {
+  background: none;
+  padding: 0;
+}
+.md blockquote {
+  border-left: 3px solid var(--marker);
+  padding-left: 0.8em;
+  color: var(--ink-2);
+}
+.md th,
+.md td {
+  border: 1px solid var(--line);
+  padding: 0.35em 0.6em;
+  text-align: left;
+  vertical-align: top;
+}
+.md th {
+  background: var(--surface-2);
+  font-weight: 600;
+}
+.md strong {
+  font-weight: 600;
+}

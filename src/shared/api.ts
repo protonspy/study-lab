@@ -1,0 +1,185 @@
+import type { LearnerSnapshot } from "./analytics"
+import type { LabPreset } from "./defaults"
+import type {
+  AiSettings,
+  AppState,
+  ChangeEntry,
+  ChatMessage,
+  ChatThread,
+  ImportResult,
+  InsightReport,
+  ItemStatus,
+  JobInfo,
+  JobKind,
+  LabConfig,
+  LabContent,
+  LabInfo,
+  LabKind,
+  Lecture,
+  ModelInfo,
+  Section,
+  StudyEvent,
+  StudyPlan,
+} from "./types"
+
+export interface LectureHit {
+  n: number
+  title: string
+  sec: string
+  snippet: string
+}
+
+export interface OpenedLab {
+  lab: LabInfo
+  content: LabContent
+  state: AppState
+}
+
+/** srsq / srsc / notes send only changed keys; meta is sent whole. */
+export type StatePatch = { set?: Record<string, unknown>; del?: string[]; whole?: unknown }
+
+export interface GenerateOptions {
+  topics?: string[]
+  cards?: number
+  questions?: number
+  guide?: boolean
+  instructions?: string
+}
+
+export interface PlanOptions {
+  days?: number
+  minutesPerDay?: number
+  instructions?: string
+}
+
+export interface BuildKbOptions {
+  /** keep existing topics and only fill gaps */
+  keep?: boolean
+  cardsPerTopic?: number
+  instructions?: string
+}
+
+export type JobOptions = GenerateOptions & PlanOptions & BuildKbOptions
+
+/** Everything the renderer can ask the main process. Each method maps to one IPC call. */
+export interface Api {
+  /* labs */
+  listLabs(): Promise<LabInfo[]>
+  presets(): Promise<LabPreset[]>
+  createLab(input: { name: string; kind?: LabKind; description?: string; preset?: string }): Promise<LabInfo>
+  updateLab(id: string, patch: { name?: string; kind?: LabKind; description?: string; config?: Partial<LabConfig> }): Promise<LabInfo>
+  deleteLab(id: string): Promise<void>
+  openLab(id: string): Promise<OpenedLab>
+  getContent(labId: string): Promise<{ lab: LabInfo; content: LabContent }>
+  loadState(labId: string): Promise<AppState>
+
+  /* import / export */
+  pickFiles(kind: "md" | "json" | "dir"): Promise<string[]>
+  importUdemy(labId: string, paths: string[]): Promise<ImportResult>
+  importBundle(labId: string, dir: string): Promise<ImportResult>
+  importProgress(labId: string, path: string): Promise<{ ok: boolean; error?: string }>
+  exportLab(labId: string): Promise<string | null>
+  importLabFile(path: string): Promise<LabInfo>
+
+  /* progress */
+  saveState(labId: string, section: Section, patch: StatePatch): Promise<void>
+  addEvents(labId: string, events: StudyEvent[]): Promise<void>
+  resetProgress(labId: string): Promise<void>
+
+  /* content you manage yourself */
+  setItemStatus(labId: string, kind: "q" | "c", ids: string[], status: ItemStatus): Promise<void>
+  deleteItems(labId: string, kind: "q" | "c", ids: string[]): Promise<void>
+
+  /* library */
+  getLectures(labId: string): Promise<Lecture[]>
+  searchLectures(labId: string, query: string, limit?: number): Promise<LectureHit[]>
+
+  /* analytics */
+  snapshot(labId: string): Promise<LearnerSnapshot>
+
+  /* AI settings */
+  aiSettings(): Promise<AiSettings>
+  setAiKey(key: string | null): Promise<AiSettings>
+  updateAiSettings(patch: { model?: string; language?: string; mcp?: { enabled?: boolean; port?: number; rotateToken?: boolean } }): Promise<AiSettings>
+  listModels(force?: boolean): Promise<ModelInfo[]>
+  testAi(): Promise<{ ok: boolean; message: string }>
+  usage(): Promise<{ today: number; month: number; total: number; calls: number }>
+
+  /* coach */
+  runJob(labId: string, kind: Exclude<JobKind, "chat">, opts?: JobOptions): Promise<string>
+  cancelJob(jobId: string): Promise<void>
+  jobs(labId: string): Promise<JobInfo[]>
+  insights(labId: string): Promise<InsightReport[]>
+  deleteInsight(labId: string, id: string): Promise<void>
+  plans(labId: string): Promise<StudyPlan[]>
+  setTaskDone(labId: string, planId: string, taskId: string, done: boolean): Promise<StudyPlan>
+  setPlanStatus(labId: string, planId: string, status: StudyPlan["status"]): Promise<void>
+  threads(labId: string): Promise<ChatThread[]>
+  messages(labId: string, threadId: string): Promise<ChatMessage[]>
+  sendChat(labId: string, threadId: string | null, text: string): Promise<{ threadId: string; jobId: string }>
+  deleteThread(labId: string, threadId: string): Promise<void>
+  changes(labId: string): Promise<ChangeEntry[]>
+  undoChange(labId: string, id: number): Promise<{ ok: boolean; error?: string }>
+
+  /* app */
+  openExternal(url: string): Promise<void>
+  appInfo(): Promise<{ version: string; dataDir: string; dbPath: string }>
+}
+
+export const API_METHODS = [
+  "listLabs",
+  "presets",
+  "createLab",
+  "updateLab",
+  "deleteLab",
+  "openLab",
+  "getContent",
+  "loadState",
+  "pickFiles",
+  "importUdemy",
+  "importBundle",
+  "importProgress",
+  "exportLab",
+  "importLabFile",
+  "saveState",
+  "addEvents",
+  "resetProgress",
+  "setItemStatus",
+  "deleteItems",
+  "getLectures",
+  "searchLectures",
+  "snapshot",
+  "aiSettings",
+  "setAiKey",
+  "updateAiSettings",
+  "listModels",
+  "testAi",
+  "usage",
+  "runJob",
+  "cancelJob",
+  "jobs",
+  "insights",
+  "deleteInsight",
+  "plans",
+  "setTaskDone",
+  "setPlanStatus",
+  "threads",
+  "messages",
+  "sendChat",
+  "deleteThread",
+  "changes",
+  "undoChange",
+  "openExternal",
+  "appInfo",
+] as const satisfies readonly (keyof Api)[]
+
+/** Pushed from main to every window. */
+export type MainEvent =
+  | { type: "job"; job: JobInfo }
+  | { type: "chat"; labId: string; threadId: string; message: ChatMessage }
+  | { type: "lab-changed"; labId: string; what: ("content" | "config" | "plans" | "insights" | "state")[] }
+
+export interface Bridge {
+  api: Api
+  onEvent(fn: (e: MainEvent) => void): () => void
+}
