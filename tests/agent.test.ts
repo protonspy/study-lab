@@ -25,17 +25,19 @@ type Reply = { content?: string | null; tool_calls?: { name: string; args: unkno
 let script: Reply[] = []
 let requests: { messages: { role: string; content: string | null; tool_calls?: unknown[]; tool_call_id?: string }[]; tools?: { function: { name: string } }[]; response_format?: unknown }[] = []
 const realFetch = globalThis.fetch
+let scripted: typeof fetch = realFetch
 
 function job(): JobHandle {
   return { id: "j", signal: new AbortController().signal, step: () => undefined, addUsage: () => undefined }
 }
 
 before(async () => {
+  process.env.STUDY_LAB_USER_SKILLS = join(dir, "skills")
   openDb(join(dir, "agent.db"))
-  saveKey("sk-or-test")
+  await saveKey("sk-or-test")
   labId = repo.createLab({ name: "Cloud", preset: "certification" }).id
   await importUdemy(labId, [join(fixtures, "sample-simulados.md"), join(fixtures, "sample-transcricoes.md")])
-  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+  globalThis.fetch = scripted = (async (url: string, init?: RequestInit) => {
     if (String(url).endsWith("/models"))
       return new Response(JSON.stringify({ data: [{ id: DEFAULT_MODEL, name: "DeepSeek", context_length: 1e6, pricing: { prompt: "0.00000015", completion: "0.0000006" }, supported_parameters: ["tools", "response_format"] }] }))
     const body = JSON.parse(String(init?.body))
@@ -44,10 +46,11 @@ before(async () => {
     if (!next) throw new Error("The script ran out of replies")
     let n = 0
     const message = {
+      role: "assistant",
       content: next.content ?? null,
       tool_calls: next.tool_calls?.map((t) => ({ id: `call_${requests.length}_${n++}`, type: "function", function: { name: t.name, arguments: JSON.stringify(t.args) } })),
     }
-    return new Response(JSON.stringify({ model: body.model, choices: [{ message, finish_reason: "stop" }], usage: { prompt_tokens: 100, completion_tokens: 20, cost: 0.0001 } }))
+    return new Response(JSON.stringify({ id: `gen-${requests.length}`, model: body.model, choices: [{ message, finish_reason: "stop" }], usage: { prompt_tokens: 100, completion_tokens: 20, cost: 0.0001 } }))
   }) as typeof fetch
 })
 
@@ -60,6 +63,7 @@ after(() => {
 beforeEach(() => {
   script = []
   requests = []
+  globalThis.fetch = scripted
 })
 
 describe("knowledge base builder", () => {
@@ -180,6 +184,43 @@ describe("coach jobs", () => {
   it("fails clearly without a key", async () => {
     saveKey(null)
     await assert.rejects(runAnalyze(labId, job()), /OpenRouter API key/)
-    saveKey("sk-or-test")
+    await saveKey("sk-or-test")
+  })
+})
+
+describe("harness: skills and external MCP connections", () => {
+  it("lists built-in skills, lets you add your own, and shows them to the model", async () => {
+    const { listSkills, saveSkill, deleteSkill } = await import("../src/main/harness/skills")
+    const names = listSkills().map((s) => s.name)
+    for (const n of ["learning-diagnosis", "study-planning", "question-writing"]) assert.ok(names.includes(n), n)
+    const mine = saveSkill({ name: "Exam Day Tips", description: "Use the night before the exam.", body: "# Tips\nSleep." })
+    assert.equal(mine.name, "exam-day-tips")
+    assert.ok(listSkills().some((s) => s.name === "exam-day-tips" && !s.builtin))
+    const thread = repo.createThread(labId, "skills").id
+    script = [{ content: "ok" }]
+    await runChat(labId, thread, "hi", job())
+    const system = JSON.stringify(requests[0].messages[0].content)
+    assert.match(system, /learning-diagnosis/)
+    assert.match(system, /exam-day-tips/)
+    deleteSkill("exam-day-tips")
+    assert.ok(!listSkills().some((s) => s.name === "exam-day-tips"))
+  })
+
+  it("connects to an external MCP server and exposes its tools with a prefix", async () => {
+    const { setSetting } = await import("../src/main/db")
+    const { applyMcp, stopMcp, mcpConfig } = await import("../src/main/mcp")
+    const { saveConnection, loadConnectionTools, testConnection } = await import("../src/main/harness/connections")
+    // Our own MCP server stands in for an external one.
+    setSetting("mcp", { enabled: true, port: 19765 + Math.floor(Math.random() * 500), token: "tok" })
+    globalThis.fetch = realFetch
+    await applyMcp()
+    const c = saveConnection({ name: "Other Lab", transport: "http", url: `http://127.0.0.1:${mcpConfig().port}/mcp/${labId}`, headers: { Authorization: "Bearer tok" }, enabled: true, labs: "all" })
+    assert.equal(c.name, "other-lab")
+    const t = await testConnection(c.id)
+    assert.ok(t.ok, t.error)
+    const loaded = await loadConnectionTools(labId)
+    assert.ok(loaded.tools.some((x) => x.name === "other-lab_get_overview"), loaded.tools.map((x) => x.name).join(","))
+    await loaded.close()
+    await stopMcp()
   })
 })

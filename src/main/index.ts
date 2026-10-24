@@ -12,7 +12,9 @@ import { cancelJob, emit, isBusy, listJobs, setBroadcaster, startJob } from "./j
 import { undo } from "./journal"
 import { applyMcp, mcpConfig, mcpStatus, saveMcpConfig } from "./mcp"
 import { cancelOAuth, connectOpenRouter } from "./oauth"
-import { chat, currentModel, keyHint, listModels, readKey, saveKey } from "./openrouter"
+import { deleteConnection, listConnections, saveConnection, testConnection } from "./harness/connections"
+import { deleteSkill, listSkills, saveSkill } from "./harness/skills"
+import { chat, currentModel, initKey, keyHint, listModels, readKey, saveKey } from "./openrouter"
 import * as repo from "./repo"
 
 let win: BrowserWindow | null = null
@@ -97,11 +99,11 @@ const api: Api = {
   /* AI settings */
   aiSettings: async () => aiSettings(),
   setAiKey: async (key) => {
-    saveKey(key)
+    await saveKey(key)
     return aiSettings()
   },
   connectOpenRouter: async () => {
-    saveKey(await connectOpenRouter())
+    await saveKey(await connectOpenRouter())
     return aiSettings()
   },
   cancelConnect: async () => cancelOAuth(),
@@ -115,6 +117,13 @@ const api: Api = {
     return aiSettings()
   },
   listModels: async (force) => listModels(force),
+  skills: async () => listSkills(),
+  saveSkill: async (input) => saveSkill(input),
+  deleteSkill: async (name) => deleteSkill(name),
+  mcpConnections: async () => listConnections(),
+  saveMcpConnection: async (c) => saveConnection(c),
+  deleteMcpConnection: async (id) => deleteConnection(id),
+  testMcpConnection: async (id) => testConnection(id),
   testAi: async () => {
     try {
       const r = await chat({ messages: [{ role: "user", content: "Reply with the single word: ready" }], task: "test", maxTokens: 20 })
@@ -228,6 +237,7 @@ else {
   app.whenReady().then(async () => {
     dbPath = process.env.STUDY_LAB_DB ?? join(app.getPath("userData"), "study-lab.db")
     openDb(dbPath)
+    await initKey()
     registerIpc()
     await applyMcp().catch(() => undefined)
     createWindow()

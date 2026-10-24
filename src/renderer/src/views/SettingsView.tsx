@@ -22,6 +22,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { AiSettingsPanel } from "@/components/AiSettingsPanel"
+import { ConnectionsCard, SkillsCard } from "@/components/HarnessPanel"
 import { DomainDot } from "@/components/Domain"
 import { updateSettings } from "@/lib/actions"
 import { data, LAB, useDataVersion } from "@/lib/data"
@@ -94,7 +95,13 @@ export function SettingsView() {
           <LabSetup />
         </TabsContent>
         <TabsContent value="ai">
-          <AiSettingsPanel />
+          <div className="flex flex-col gap-6">
+            <AiSettingsPanel />
+            <div className="grid gap-6 lg:grid-cols-2">
+              <SkillsCard />
+              <ConnectionsCard />
+            </div>
+          </div>
         </TabsContent>
         <TabsContent value="data">
           <DataSettings />

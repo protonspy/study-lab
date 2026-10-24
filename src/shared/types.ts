@@ -349,6 +349,29 @@ export interface AiSettings {
   mcp: { enabled: boolean; port: number; token: string; running: boolean; error?: string }
 }
 
+/** An external MCP server the coach can use. */
+export interface McpConnection {
+  id: string
+  /** short name; also prefixes its tools */
+  name: string
+  transport: "http" | "stdio"
+  url?: string
+  headers?: Record<string, string>
+  command?: string
+  args?: string[]
+  env?: Record<string, string>
+  enabled: boolean
+  /** "all" or the lab ids it is enabled for */
+  labs: "all" | string[]
+}
+
+export interface SkillInfo {
+  name: string
+  description: string
+  body: string
+  builtin: boolean
+}
+
 export interface Usage {
   model: string
   tokensIn: number

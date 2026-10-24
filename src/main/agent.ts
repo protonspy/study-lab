@@ -1,11 +1,13 @@
 import { dayKey, daysUntil } from "@shared/analytics"
 import type { GenerateOptions, PlanOptions } from "@shared/api"
-import type { ChatMessage, ChatToolCall, InsightItem, InsightReport, Misconception } from "@shared/types"
+import type { ChatToolCall, InsightItem, InsightReport, Misconception } from "@shared/types"
+import { HumanMessage, ToolMessage, type BaseMessage } from "@langchain/core/messages"
 import { getSetting } from "./db"
+import { fromStored, runLabAgent, toStored } from "./harness/agent"
 import { emit, type JobHandle } from "./jobs"
-import { chat, currentModel, listModels, type Msg, type ToolDef } from "./openrouter"
+import { currentModel } from "./openrouter"
 import * as repo from "./repo"
-import { runTool, TOOLS, type Tool, type ToolContext, type Touched } from "./tools"
+import { TOOLS, type Tool } from "./tools"
 
 /* ---------- prompt ---------- */
 
@@ -56,130 +58,10 @@ Talk to the learner in ${language()}. Write study material (flashcards, question
 - Use learning science: spaced retrieval, interleaving, elaboration, worked contrasts for look-alikes, and fixing confident errors first. Keep the daily load realistic.
 - You can change the lab with write tools: create flashcards, questions and study guides; organise topics; archive learned material; pin focus topics; save study plans and practice sets; adjust study settings. Every change is logged and the learner can undo it, so act when it clearly helps, and say what you changed.
 - When creating content, search the lecture transcripts first and stay faithful to them. Do not invent product facts; if the course material does not cover something, say so.
+- Skills: before a task, read the matching skill file (learning-diagnosis, study-planning, flashcard-writing, question-writing, study-guide, knowledge-mapping, content-curation, or the learner's own skills) and follow it.
+- Delegate focused work to sub-agents when it helps: learning-analyst for diagnosis, content-author for writing material.
+- Tools whose names start with a connection name and an underscore come from the learner's external MCP connections; use them when they are relevant.
 - Be concise and concrete. Prefer short sections and bullet points.`
-}
-
-/* ---------- agent loop ---------- */
-
-function toolDefs(tools: Tool[]): ToolDef[] {
-  return tools.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: t.schema } }))
-}
-
-const STEP_LABEL: Record<string, string> = {
-  get_overview: "Reading your analytics",
-  list_topics: "Reviewing topics",
-  get_topic_report: "Studying a topic",
-  list_mistakes: "Looking at your mistakes",
-  get_question: "Reading a question",
-  search_content: "Searching the course",
-  read_lecture: "Reading a lecture",
-  list_items: "Checking items",
-  get_plan: "Checking the plan",
-  get_lab: "Reading the lab setup",
-  create_flashcards: "Writing flashcards",
-  create_questions: "Writing questions",
-  write_study_guide: "Writing a study guide",
-  save_study_plan: "Saving the plan",
-  save_insight_report: "Saving the report",
-  set_focus: "Pinning focus topics",
-  create_collection: "Building a practice set",
-  upsert_topic: "Organising topics",
-  tag_questions: "Tagging questions",
-  set_item_status: "Managing material",
-  remember: "Saving a note",
-}
-
-export interface LoopResult {
-  text: string
-  raw: Msg[]
-  calls: ChatToolCall[]
-}
-
-async function ensureToolModel() {
-  const model = currentModel()
-  try {
-    const m = (await listModels()).find((x) => x.id === model)
-    if (m && !m.tools) throw new Error(`${model} cannot call tools. Pick a model with tool support in Settings → AI coach.`)
-  } catch (e) {
-    if ((e as Error).message.includes("cannot call tools")) throw e
-  }
-}
-
-export async function agentLoop(opts: {
-  labId: string
-  messages: Msg[]
-  tools: Tool[]
-  job: JobHandle
-  task: string
-  extraTools?: Tool[]
-  maxSteps?: number
-  onCall?: (c: ChatToolCall) => void
-}): Promise<LoopResult> {
-  await ensureToolModel()
-  const tools = [...opts.tools, ...(opts.extraTools ?? [])]
-  const byName = new Map(tools.map((t) => [t.name, t]))
-  const defs = toolDefs(tools)
-  const raw: Msg[] = []
-  const calls: ChatToolCall[] = []
-  const touched = new Set<Touched>()
-  const ctx: ToolContext = { labId: opts.labId, actor: currentModel(), notify: (w) => w.forEach((x) => touched.add(x)) }
-  const flush = () => {
-    if (touched.size) emit({ type: "lab-changed", labId: opts.labId, what: [...touched] as ("content" | "config" | "plans" | "insights" | "state")[] })
-    touched.clear()
-  }
-  const max = opts.maxSteps ?? 14
-  try {
-    for (let step = 0; step < max; step++) {
-      const res = await chat({ messages: [...opts.messages, ...raw], tools: defs, task: opts.task, labId: opts.labId, signal: opts.job.signal, maxTokens: 8000 })
-      opts.job.addUsage(res.usage, res.model)
-      const msg = res.message
-      const toolCalls = msg.tool_calls ?? []
-      raw.push({ role: "assistant", content: msg.content ?? "", ...(toolCalls.length ? { tool_calls: toolCalls } : {}) })
-      if (!toolCalls.length) return { text: msg.content ?? "", raw, calls }
-      for (const tc of toolCalls) {
-        opts.job.step(`${STEP_LABEL[tc.function.name] ?? tc.function.name}…`, Math.min(0.95, (step + 1) / max))
-        let args: Record<string, unknown> = {}
-        try {
-          args = tc.function.arguments ? (JSON.parse(tc.function.arguments) as Record<string, unknown>) : {}
-        } catch {
-          raw.push({ role: "tool", tool_call_id: tc.id, content: JSON.stringify({ error: "Arguments were not valid JSON. Try again." }) })
-          continue
-        }
-        const tool = byName.get(tc.function.name)
-        const out = tool ? runTool(ctx, tc.function.name, args, tool) : { ok: false, result: { error: `Unknown tool ${tc.function.name}` } }
-        const call: ChatToolCall = { name: tc.function.name, args: tc.function.arguments.slice(0, 2000), ok: out.ok, summary: summarize(out.result) }
-        calls.push(call)
-        opts.onCall?.(call)
-        let text = JSON.stringify(out.result)
-        if (text.length > 24000) text = `${text.slice(0, 24000)}… (truncated)`
-        raw.push({ role: "tool", tool_call_id: tc.id, content: text })
-      }
-      flush()
-    }
-    // Out of steps: ask for a wrap-up without tools.
-    const res = await chat({
-      messages: [...opts.messages, ...raw, { role: "user", content: "Stop calling tools now and give your final answer based on what you have." }],
-      task: opts.task,
-      labId: opts.labId,
-      signal: opts.job.signal,
-    })
-    opts.job.addUsage(res.usage, res.model)
-    raw.push({ role: "assistant", content: res.message.content ?? "" })
-    return { text: res.message.content ?? "", raw, calls }
-  } finally {
-    flush()
-  }
-}
-
-function summarize(result: unknown): string {
-  if (!result || typeof result !== "object") return ""
-  const r = result as Record<string, unknown>
-  if (r.error) return String(r.error).slice(0, 200)
-  if (typeof r.created === "number") return `created ${r.created}`
-  if (typeof r.updated === "number") return `updated ${r.updated}`
-  if (typeof r.tagged === "number") return `tagged ${r.tagged}`
-  if (Array.isArray(result)) return `${result.length} rows`
-  return ""
 }
 
 /* ---------- jobs ---------- */
@@ -261,61 +143,42 @@ function latestInsightText(labId: string): string {
 
 export async function runAnalyze(labId: string, job: JobHandle) {
   let saved: InsightReport | null = null
-  const res = await agentLoop({
+  const res = await runLabAgent({
     labId,
     job,
     task: "analyze",
     tools: READ,
     extraTools: [reportTool(labId, (r) => (saved = r))],
+    connections: false,
+    system: systemPrompt(labId),
     messages: [
-      { role: "system", content: systemPrompt(labId) },
-      {
-        role: "user",
-        content: `Analyse how I am learning in this lab. Start with get_overview, then look at my weakest topics and my actual wrong answers (list_mistakes) to find patterns: knowledge gaps, misconceptions, forgetting, rushing, confidence calibration and confusable topics. Then call save_insight_report once with specific, evidence-backed insights and next actions. Write the report in ${language()}.`,
-      },
+      new HumanMessage(
+        `Analyse how I am learning in this lab, following the learning-diagnosis skill. Start with get_overview, read my weakest concepts and actual wrong answers, then call save_insight_report once with specific, evidence-backed insights and next actions. Write the report in ${language()}.`,
+      ),
     ],
   })
   if (!saved) {
     // Some models answer in prose instead of calling the tool; keep that answer as a report.
-    const report: InsightReport = {
-      id: repo.newId("ins_"),
-      at: Date.now(),
-      model: currentModel(),
-      headline: "Analysis",
-      summary: res.text,
-      strengths: [],
-      insights: [],
-      misconceptions: [],
-      next: [],
-    }
-    repo.saveInsight(labId, report)
+    repo.saveInsight(labId, { id: repo.newId("ins_"), at: Date.now(), model: currentModel(), headline: "Analysis", summary: res.text, strengths: [], insights: [], misconceptions: [], next: [] })
     emit({ type: "lab-changed", labId, what: ["insights"] })
   }
 }
 
 export async function runPlan(labId: string, job: JobHandle, o: PlanOptions) {
   const days = Math.max(1, Math.min(30, o.days ?? 7))
-  const minutes = Math.max(10, Math.min(480, o.minutesPerDay ?? 60))
-  await agentLoop({
+  const minutes = o.minutesPerDay ?? repo.readMeta(labId).settings.minutesPerDay
+  await runLabAgent({
     labId,
     job,
     task: "plan",
     maxSteps: 16,
     tools: [...READ, ...pick("save_study_plan", "create_collection", "set_focus", "update_study_settings", "remember")],
+    system: systemPrompt(labId),
     messages: [
-      { role: "system", content: systemPrompt(labId) },
-      {
-        role: "user",
-        content: `Build my study plan for the next ${days} days, about ${minutes} minutes a day.
-${latestInsightText(labId)}
-
-Steps: check get_overview and get_plan; look at the weakest and not-yet-started topics weighted by exam weight; then
-1. pin 2–5 focus topics with set_focus;
-2. if useful, create one or two practice sets with create_collection (e.g. my repeated errors, or confusable topics side by side);
-3. save the plan with save_study_plan: every day starts with a "review" task, then targeted work; spread topics (interleave), revisit weak topics after 1–3 days, schedule a mock exam when it makes sense, keep each day close to ${minutes} minutes.
-Write titles, focus lines and reasons in ${language()}.${o.instructions ? `\nAlso: ${o.instructions}` : ""}
-Finish with a short summary of the plan and why.`,
-      },
+      new HumanMessage(`Build my study plan for the next ${days} days, about ${minutes} minutes a day, following the study-planning skill.
+${latestInsightText(labId)}${o.instructions ? `
+Also: ${o.instructions}` : ""}
+Write titles, focus lines and reasons in ${language()}. Finish with a short summary of the plan and why.`),
     ],
   })
 }
@@ -324,24 +187,28 @@ export async function runGenerate(labId: string, job: JobHandle, o: GenerateOpti
   const cards = Math.max(0, Math.min(30, o.cards ?? 8))
   const questions = Math.max(0, Math.min(15, o.questions ?? 4))
   const topics = o.topics?.length ? `these topics: ${o.topics.join(", ")}` : "the 2–3 topics where I need it most (use the analytics; prefer weak topics with misconceptions or repeated errors)"
-  await agentLoop({
+  await runLabAgent({
     labId,
     job,
     task: "generate",
-    maxSteps: 24,
+    maxSteps: 30,
     tools: [...READ, ...pick("create_flashcards", "create_questions", "write_study_guide", "upsert_topic", "set_item_status")],
+    system: systemPrompt(labId),
     messages: [
-      { role: "system", content: systemPrompt(labId) },
-      {
-        role: "user",
-        content: `Create new study material for ${topics}.
+      new HumanMessage(`Create new study material for ${topics}.
 ${latestInsightText(labId)}
 
-For each topic: read get_topic_report and list_mistakes for it, search_content / read_lecture for the course material, then
-${o.guide !== false ? "- write_study_guide: a focused guide that fixes my specific misconceptions, contrasts look-alikes in a table and ends with 3 self-check questions;\n" : ""}${cards ? `- create_flashcards: about ${cards} cards (mix concept, compare and trigger cards) aimed at what I get wrong;\n` : ""}${questions ? `- create_questions: about ${questions} new exam-style questions with plausible distractors built from my actual wrong picks, and a rationale for every option;\n` : ""}- if two topics are easy to confuse, record it with upsert_topic (confusable).
-Do not duplicate cards or questions that already exist.${o.instructions ? `\nAlso: ${o.instructions}` : ""}
-Finish with a short list of what you created.`,
-      },
+For each topic, read get_topic_report and list_mistakes, ground yourself in search_content / read_lecture, then
+${[
+        o.guide !== false && "- write a study guide (study-guide skill) that fixes my specific misconceptions;",
+        cards && `- about ${cards} flashcards (flashcard-writing skill) aimed at what I get wrong;`,
+        questions && `- about ${questions} exam-style questions (question-writing skill) with distractors from my actual wrong picks;`,
+        "- if two topics are easy to confuse, record it with upsert_topic (confusable).",
+        o.instructions && `Also: ${o.instructions}`,
+      ]
+        .filter(Boolean)
+        .join("\n")}
+Finish with a short list of what you created.`),
     ],
   })
 }
@@ -350,25 +217,25 @@ Finish with a short list of what you created.`,
 
 export async function runChat(labId: string, threadId: string, text: string, job: JobHandle) {
   const at = Date.now()
-  const userRaw: Msg = { role: "user", content: text }
-  const history = trimHistory(repo.rawMessages(threadId) as Msg[])
-  const userMsg = repo.addMessage(threadId, { role: "user", content: text, at }, [userRaw])
+  const user = new HumanMessage(text)
+  const history = trimHistory(fromStored(repo.rawMessages(threadId)))
+  const userMsg = repo.addMessage(threadId, { role: "user", content: text, at }, toStored([user]))
   emit({ type: "chat", labId, threadId, message: userMsg })
-  const calls: ChatToolCall[] = []
+  let calls: ChatToolCall[] = []
   try {
-    const res = await agentLoop({
+    const res = await runLabAgent({
       labId,
       job,
       task: "chat",
-      maxSteps: 16,
-      tools: TOOLS,
-      messages: [{ role: "system", content: systemPrompt(labId) }, ...history, userRaw],
-      onCall: (c) => {
-        calls.push(c)
-        emit({ type: "chat", labId, threadId, message: { id: -1, role: "assistant", content: "", tools: [...calls], at: Date.now() } })
+      maxSteps: 20,
+      system: systemPrompt(labId),
+      messages: [...history, user],
+      onToolCall: (c) => {
+        calls = c
+        emit({ type: "chat", labId, threadId, message: { id: -1, role: "assistant", content: "", tools: c, at: Date.now() } })
       },
     })
-    const msg = repo.addMessage(threadId, { role: "assistant", content: res.text || "(no answer)", tools: res.calls, at: Date.now() }, res.raw)
+    const msg = repo.addMessage(threadId, { role: "assistant", content: res.text || "(no answer)", tools: res.calls, at: Date.now() }, toStored(res.added))
     emit({ type: "chat", labId, threadId, message: msg })
   } catch (e) {
     const msg = repo.addMessage(threadId, { role: "assistant", content: `⚠️ ${(e as Error).message}`, tools: calls, at: Date.now() })
@@ -377,16 +244,16 @@ export async function runChat(labId: string, threadId: string, text: string, job
   }
 }
 
-/** Keep the conversation affordable: last ~40 provider messages, old tool results shortened. */
-function trimHistory(msgs: Msg[]): Msg[] {
+/** Keep the conversation affordable: the last ~40 messages, starting on a user turn, old tool results shortened. */
+function trimHistory(msgs: BaseMessage[]): BaseMessage[] {
   let out = msgs.slice(-40)
-  // Never start on a tool result or an assistant tool call whose results were cut off.
-  while (out.length && out[0].role !== "user") out = out.slice(1)
-  return out.map((m, i) => (m.role === "tool" && i < out.length - 12 && m.content.length > 1500 ? { ...m, content: `${m.content.slice(0, 1500)}… (truncated)` } : m))
+  while (out.length && !HumanMessage.isInstance(out[0])) out = out.slice(1)
+  return out.map((m, i) => {
+    if (!ToolMessage.isInstance(m) || i >= out.length - 12 || typeof m.content !== "string" || m.content.length <= 1500) return m
+    return new ToolMessage({ content: `${m.content.slice(0, 1500)}… (truncated)`, tool_call_id: m.tool_call_id, name: m.name })
+  })
 }
 
 export function chatTitle(text: string): string {
   return text.replace(/\s+/g, " ").trim().slice(0, 60)
 }
-
-export type { ChatMessage }

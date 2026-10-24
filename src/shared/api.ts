@@ -17,6 +17,8 @@ import type {
   LabInfo,
   LabKind,
   Lecture,
+  McpConnection,
+  SkillInfo,
   ModelInfo,
   Section,
   StudyEvent,
@@ -133,6 +135,14 @@ export interface Api {
   cancelConnect(): Promise<void>
   updateAiSettings(patch: { model?: string; language?: string; mcp?: { enabled?: boolean; port?: number; rotateToken?: boolean } }): Promise<AiSettings>
   listModels(force?: boolean): Promise<ModelInfo[]>
+  /* coach harness: skills and external MCP servers */
+  skills(): Promise<SkillInfo[]>
+  saveSkill(input: { name: string; description: string; body: string }): Promise<SkillInfo>
+  deleteSkill(name: string): Promise<void>
+  mcpConnections(): Promise<McpConnection[]>
+  saveMcpConnection(c: Omit<McpConnection, "id"> & { id?: string }): Promise<McpConnection>
+  deleteMcpConnection(id: string): Promise<void>
+  testMcpConnection(id: string): Promise<{ ok: boolean; tools: string[]; error?: string }>
   testAi(): Promise<{ ok: boolean; message: string }>
   usage(): Promise<{ today: number; month: number; total: number; calls: number }>
 
@@ -188,6 +198,13 @@ export const API_METHODS = [
   "cancelConnect",
   "updateAiSettings",
   "listModels",
+  "skills",
+  "saveSkill",
+  "deleteSkill",
+  "mcpConnections",
+  "saveMcpConnection",
+  "deleteMcpConnection",
+  "testMcpConnection",
   "testAi",
   "usage",
   "runJob",

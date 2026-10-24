@@ -8,27 +8,53 @@ const BASE = "https://openrouter.ai/api/v1"
 
 /* ---------- key, kept encrypted with the OS keychain (DPAPI on Windows) ---------- */
 
-export function saveKey(key: string | null) {
+let cachedKey: string | null = null
+
+/** Decrypt the stored key once at startup; afterwards readKey() is a cheap synchronous read. */
+export async function initKey() {
+  const v = getSetting<{ enc: boolean; v: string } | null>("openrouter.key", null)
+  if (!v) {
+    cachedKey = null
+    return
+  }
+  try {
+    const buf = Buffer.from(v.v, "base64")
+    cachedKey = v.enc ? (await safeStorage.decryptStringAsync(buf)).result : buf.toString()
+  } catch {
+    cachedKey = null
+  }
+}
+
+export async function saveKey(key: string | null) {
   if (!key) {
     setSetting("openrouter.key", null)
+    cachedKey = null
     return
   }
   const trimmed = key.trim()
-  const value = safeStorage.isEncryptionAvailable()
-    ? { enc: true, v: safeStorage.encryptString(trimmed).toString("base64") }
+  const value = (await safeStorage.isAsyncEncryptionAvailable())
+    ? { enc: true, v: (await safeStorage.encryptStringAsync(trimmed)).toString("base64") }
     : { enc: false, v: Buffer.from(trimmed).toString("base64") }
   setSetting("openrouter.key", value)
+  cachedKey = trimmed
 }
 
 export function readKey(): string | null {
-  const v = getSetting<{ enc: boolean; v: string } | null>("openrouter.key", null)
-  if (!v) return null
-  try {
-    const buf = Buffer.from(v.v, "base64")
-    return v.enc ? safeStorage.decryptString(buf) : buf.toString()
-  } catch {
-    return null
-  }
+  return cachedKey
+}
+
+/** Turn provider errors into something a learner can act on. */
+export function friendlyAiError(e: unknown): Error {
+  const err = e as { statusCode?: number; status?: number; message?: string; name?: string }
+  const status = err?.statusCode ?? err?.status
+  const msg = String(err?.message ?? e)
+  if (status === 401 || err?.name === "OpenRouterAuthError" || /user not found|invalid api key|no auth credentials/i.test(msg))
+    return new AiError("OpenRouter rejected the API key. Reconnect in Settings → AI coach.", 401)
+  if (status === 402 || /insufficient credits|payment required/i.test(msg)) return new AiError("Your OpenRouter account is out of credits.", 402)
+  if (status === 429) return new AiError("OpenRouter is rate-limiting this model right now. Try again in a minute or pick another model.", 429)
+  if (/no endpoints found.*tool/i.test(msg)) return new AiError("This model has no provider that supports tool calling right now. Pick another model in Settings → AI coach.")
+  if ((e as Error)?.name === "AbortError" || /aborted/i.test(msg)) return new AiError("Cancelled.")
+  return e instanceof Error ? e : new Error(msg)
 }
 
 export function keyHint(): string {
