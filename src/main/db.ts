@@ -182,6 +182,25 @@ const MIGRATIONS: string[] = [
     value TEXT NOT NULL
   );
   `,
+  // v2: where content came from (content packages)
+  `
+  CREATE TABLE sources (
+    lab_id TEXT NOT NULL REFERENCES labs(id) ON DELETE CASCADE,
+    id TEXT NOT NULL,
+    adapter TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    title TEXT NOT NULL,
+    url TEXT,
+    language TEXT,
+    lecture_base INTEGER NOT NULL DEFAULT 0,
+    imported_at INTEGER NOT NULL,
+    stats TEXT NOT NULL DEFAULT '{}',
+    PRIMARY KEY (lab_id, id)
+  );
+  ALTER TABLE lectures ADD COLUMN source_id TEXT;
+  ALTER TABLE lectures ADD COLUMN kind TEXT NOT NULL DEFAULT 'lecture';
+  ALTER TABLE questions ADD COLUMN source_id TEXT;
+  `,
 ]
 
 let db: DatabaseSync | null = null

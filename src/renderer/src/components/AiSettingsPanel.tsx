@@ -66,8 +66,9 @@ export function AiSettingsPanel({ compact }: { compact?: boolean }) {
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
+          <ConnectButton onConnected={setAi} connected={ai.hasKey} />
           <div className="space-y-1.5">
-            <Label htmlFor="or-key">API key</Label>
+            <Label htmlFor="or-key">{ai.hasKey ? "API key" : "Or paste an API key"}</Label>
             <div className="flex gap-2">
               <Input
                 id="or-key"
@@ -122,12 +123,44 @@ export function AiSettingsPanel({ compact }: { compact?: boolean }) {
   )
 }
 
-function ModelPicker({ value, onChange }: { value: string; onChange: (id: string) => void }) {
+/** OAuth PKCE sign-in: the browser asks for consent and the key comes back to the app. */
+export function ConnectButton({ onConnected, connected }: { onConnected: (a: AiSettings) => void; connected?: boolean }) {
+  const [waiting, setWaiting] = useState(false)
+  async function go() {
+    setWaiting(true)
+    try {
+      const a = await api().connectOpenRouter()
+      onConnected(a)
+      toast.success("Connected to OpenRouter")
+    } catch (e) {
+      toast.error((e as Error).message.replace(/^Error invoking remote method 'api': (Error: )?/, ""))
+    } finally {
+      setWaiting(false)
+    }
+  }
+  if (waiting)
+    return (
+      <div className="flex items-center gap-3 rounded-md border border-line px-3 py-2.5 text-sm">
+        <Loader2 className="size-4 animate-spin" />
+        <span className="flex-1">Finish signing in to OpenRouter in your browser…</span>
+        <Button size="sm" variant="ghost" onClick={() => void api().cancelConnect()}>
+          Cancel
+        </Button>
+      </div>
+    )
+  return (
+    <Button variant={connected ? "outline" : "default"} onClick={() => void go()} className="w-fit">
+      <KeyRound /> {connected ? "Reconnect with OpenRouter" : "Connect with OpenRouter"}
+    </Button>
+  )
+}
+
+export function ModelPicker({ value, onChange }: { value: string; onChange: (id: string) => void }) {
   const [models, setModels] = useState<ModelInfo[] | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const [q, setQ] = useState("")
   const [open, setOpen] = useState(false)
-  const [toolsOnly, setToolsOnly] = useState(true)
+  const [compatibleOnly, setCompatibleOnly] = useState(true)
 
   const load = (force = false) => {
     setErr(null)
@@ -142,9 +175,10 @@ function ModelPicker({ value, onChange }: { value: string; onChange: (id: string
   const shown = useMemo(() => {
     const needle = q.trim().toLowerCase()
     return (models ?? [])
-      .filter((m) => (!toolsOnly || m.tools) && (!needle || m.id.toLowerCase().includes(needle) || m.name.toLowerCase().includes(needle)))
-      .slice(0, 120)
-  }, [models, q, toolsOnly])
+      .filter((m) => (!compatibleOnly || m.fit !== "unsupported") && (!needle || m.id.toLowerCase().includes(needle) || m.name.toLowerCase().includes(needle)))
+      .sort((a, b) => FIT_RANK[a.fit] - FIT_RANK[b.fit] || a.id.localeCompare(b.id))
+      .slice(0, 150)
+  }, [models, q, compatibleOnly])
 
   return (
     <div className="space-y-1.5">
@@ -154,7 +188,7 @@ function ModelPicker({ value, onChange }: { value: string; onChange: (id: string
           <p className="truncate font-mono text-sm">{value}</p>
           <p className="text-xs text-ink-3">
             {current
-              ? `${Math.round(current.context / 1000)}k context · ${price(current.inPrice)} in / ${price(current.outPrice)} out per 1M tokens${current.tools ? "" : " · no tool use"}`
+              ? `${Math.round(current.context / 1000)}k context · ${price(current.inPrice)} in / ${price(current.outPrice)} out per 1M tokens`
               : models
                 ? "Not in the OpenRouter catalogue right now."
                 : err ?? "Loading the catalogue…"}
@@ -171,14 +205,19 @@ function ModelPicker({ value, onChange }: { value: string; onChange: (id: string
           </Button>
         </div>
       </div>
-      {current && !current.tools && <p className="text-xs text-bad">This model cannot call tools, so the coach cannot read your data or change the lab. Pick one marked with a wrench.</p>}
+      {current && current.fit !== "ready" && (
+        <p className={cn("text-xs", current.fit === "unsupported" ? "text-bad" : "text-warn")}>
+          {current.fit === "unsupported" ? "The coach cannot run on this model: " : "Works, with limits: "}
+          {current.notes.join("; ")}.
+        </p>
+      )}
       {open && (
         <div className="rounded-md border border-line">
           <div className="flex items-center gap-2 border-b border-line p-2">
             <Search className="size-4 text-ink-3" />
             <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search 400+ models: claude, gpt, gemini, deepseek…" className="h-8 border-0 shadow-none focus-visible:ring-0" autoFocus />
-            <label className="flex shrink-0 items-center gap-1.5 text-xs text-ink-3">
-              <Switch checked={toolsOnly} onCheckedChange={setToolsOnly} /> tools
+            <label className="flex shrink-0 items-center gap-1.5 text-xs text-ink-3" title="Hide models the agent harness cannot use (no tool calling)">
+              <Switch checked={compatibleOnly} onCheckedChange={setCompatibleOnly} /> compatible
             </label>
             <Button variant="ghost" size="icon" className="size-8" onClick={() => load(true)} aria-label="Refresh">
               <RefreshCw className="size-3.5" />
@@ -199,7 +238,7 @@ function ModelPicker({ value, onChange }: { value: string; onChange: (id: string
                     <span className="block truncate font-mono text-xs">{m.id}</span>
                     <span className="block truncate text-xs text-ink-3">{m.name}</span>
                   </span>
-                  {m.tools && <Wrench className="size-3.5 shrink-0 text-ink-3" aria-label="tool use" />}
+                  <FitBadge fit={m.fit} notes={m.notes} />
                   <span className="shrink-0 font-mono text-[0.7rem] text-ink-3 tabular">
                     {Math.round(m.context / 1000)}k · {price(m.inPrice)}/{price(m.outPrice)}
                   </span>
@@ -218,6 +257,23 @@ function ModelPicker({ value, onChange }: { value: string; onChange: (id: string
         </div>
       )}
     </div>
+  )
+}
+
+const FIT_RANK = { ready: 0, limited: 1, unsupported: 2 } as const
+
+export function FitBadge({ fit, notes }: { fit: ModelInfo["fit"]; notes: string[] }) {
+  const label = fit === "ready" ? "ready" : fit === "limited" ? "limited" : "no tools"
+  return (
+    <span
+      title={notes.join("; ") || "Tool calling, forced tool choice, JSON mode and a wide context"}
+      className={cn(
+        "inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-[0.65rem] font-medium",
+        fit === "ready" ? "bg-good-bg text-good" : fit === "limited" ? "bg-warn-bg text-warn" : "bg-bad-bg text-bad",
+      )}
+    >
+      <Wrench className="size-3" /> {label}
+    </span>
   )
 }
 

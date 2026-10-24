@@ -78,6 +78,32 @@ export async function updateLabConfig(patch: { name?: string; description?: stri
   setLabInfo(lab)
 }
 
+/* ---------- setup wizard ---------- */
+
+let setup = false
+const setupListeners = new Set<() => void>()
+function emitSetup() {
+  for (const fn of setupListeners) fn()
+}
+export function startSetup() {
+  setup = true
+  emitSetup()
+}
+export function finishSetup() {
+  setup = false
+  emitSetup()
+}
+export function useSetup() {
+  return useSyncExternalStore(
+    (fn) => {
+      setupListeners.add(fn)
+      return () => setupListeners.delete(fn)
+    },
+    () => setup,
+    () => setup,
+  )
+}
+
 /* ---------- coach records: a version counter views can depend on ---------- */
 
 let coachVersion = 0

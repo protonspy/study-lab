@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react"
-import { Archive, ArchiveRestore, FileText, FolderInput, Loader2, Pause, Sparkles, Trash2 } from "lucide-react"
+import { useEffect, useMemo, useState } from "react"
+import { Archive, ArchiveRestore, Pause, Sparkles, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -13,8 +13,10 @@ import { JobStrip, startCoachJob } from "@/components/Jobs"
 import { DomainDot } from "@/components/Domain"
 import { data, LAB, sourceName, useDataVersion } from "@/lib/data"
 import { api, reloadContent } from "@/lib/lab"
-import { flush, useAppState } from "@/lib/store"
-import type { ImportResult, ItemStatus } from "@/lib/types"
+import { useAppState } from "@/lib/store"
+import type { ItemStatus } from "@/lib/types"
+import type { SourceInfo } from "@shared/api"
+import { ImportPanel } from "@/components/ImportPanel"
 import { cn } from "@/lib/utils"
 import { PageHead } from "@/views/ReviewView"
 
@@ -37,68 +39,39 @@ export function ContentView() {
   )
 }
 
-function summary(r: ImportResult) {
-  const parts = [r.questions && `${r.questions} questions`, r.lectures && `${r.lectures} lectures`, r.topics && `${r.topics} topics`, r.cards && `${r.cards} cards`].filter(Boolean)
-  return parts.length ? `Imported ${parts.join(", ")}.` : "Nothing new was found."
-}
-
 function ImportCard() {
   const lab = LAB!
-  const [busy, setBusy] = useState(false)
-  const [last, setLast] = useState<ImportResult | null>(null)
-
-  async function run(kind: "md" | "dir") {
-    const paths = await api().pickFiles(kind)
-    if (!paths.length) return
-    setBusy(true)
-    try {
-      await flush()
-      const r = kind === "md" ? await api().importUdemy(lab.id, paths) : await api().importBundle(lab.id, paths[0])
-      setLast(r)
-      await reloadContent()
-      toast.success(summary(r))
-    } catch (e) {
-      toast.error((e as Error).message)
-    } finally {
-      setBusy(false)
-    }
-  }
-
+  const [sources, setSources] = useState<SourceInfo[]>([])
+  const load = () => void api().sources(lab.id).then(setSources)
+  useEffect(load, [lab.id])
   return (
     <Card>
       <CardHeader>
         <CardTitle>Import</CardTitle>
-        <CardDescription>Re-importing the same course updates its questions and keeps your progress.</CardDescription>
+        <CardDescription>Every format becomes a standard content package. Re-importing the same course updates it and keeps your progress.</CardDescription>
       </CardHeader>
-      <CardContent className="flex flex-col gap-3">
-        <Button variant="outline" className="h-auto justify-start whitespace-normal py-3 text-left" onClick={() => run("md")} disabled={busy}>
-          <FileText className="size-5" />
-          <span>
-            <span className="block font-medium">Udemy Study Export (Markdown)</span>
-            <span className="block text-xs font-normal text-ink-3">The “— Simulados” and “— Transcrições (EN)” files. Pick one or both.</span>
-          </span>
-        </Button>
-        <Button variant="outline" className="h-auto justify-start whitespace-normal py-3 text-left" onClick={() => run("dir")} disabled={busy}>
-          <FolderInput className="size-5" />
-          <span>
-            <span className="block font-medium">Study Lab data folder</span>
-            <span className="block text-xs font-normal text-ink-3">A folder with questions.json, kb.json and lectures.json (e.g. aifc01-study-lab/public/data).</span>
-          </span>
-        </Button>
-        {busy && (
-          <p className="flex items-center gap-2 text-sm text-ink-2">
-            <Loader2 className="size-4 animate-spin" /> Importing…
-          </p>
-        )}
-        {last && (
-          <div className="rounded-md bg-surface-2 px-3 py-2 text-xs text-ink-2">
-            <p>{summary(last)}</p>
-            {!!last.sets.length && <p className="mt-1 text-ink-3">Sets: {last.sets.slice(0, 8).join(" · ")}{last.sets.length > 8 ? " …" : ""}</p>}
-            {last.warnings.slice(0, 5).map((w, i) => (
-              <p key={i} className="mt-1 text-warn">
-                {w}
-              </p>
-            ))}
+      <CardContent className="flex flex-col gap-4">
+        <ImportPanel
+          labId={lab.id}
+          compact
+          onImported={async () => {
+            await reloadContent()
+            load()
+          }}
+        />
+        {!!sources.length && (
+          <div>
+            <p className="eyebrow mb-1.5">Sources in this lab</p>
+            <ul className="flex flex-col gap-1 text-sm">
+              {sources.map((x) => (
+                <li key={x.id} className="flex items-baseline gap-2">
+                  <span className="min-w-0 flex-1 truncate">{x.title}</span>
+                  <span className="shrink-0 text-xs text-ink-3">
+                    {x.provider} · {x.stats.documents} docs · {x.stats.items} questions
+                  </span>
+                </li>
+              ))}
+            </ul>
           </div>
         )}
       </CardContent>

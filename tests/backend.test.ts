@@ -68,7 +68,10 @@ describe("labs, analytics and coach tools", () => {
     assert.equal(r.lectures, 4)
     const lab = repo.getLab(labId)
     assert.equal(lab.counts.questions, 3)
-    assert.equal(lab.config.sources.course, "Sample Cloud Course")
+    const src = repo.readContent(labId).questions[0].src
+    assert.equal(lab.config.sources[src], "Sample Cloud Course")
+    const { listSources } = await import("../src/main/content/ingest")
+    assert.deepEqual(listSources(labId).map((x) => [x.adapter, x.stats.documents, x.stats.items]), [["udemy-study-export", 4, 3]])
     // Re-import updates in place.
     await importUdemy(labId, [join(fixtures, "sample-simulados.md")])
     assert.equal(repo.getLab(labId).counts.questions, 3)

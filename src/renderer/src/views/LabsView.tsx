@@ -3,15 +3,10 @@ import { BookOpenCheck, Bot, FileUp, FlaskConical, GraduationCap, Languages, Lib
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Textarea } from "@/components/ui/textarea"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { AiSettingsPanel, useAiSettings } from "@/components/AiSettingsPanel"
-import type { LabPreset } from "@shared/defaults"
-import { api, openLab } from "@/lib/lab"
+import { api, openLab, startSetup } from "@/lib/lab"
 import type { LabInfo, LabKind } from "@/lib/types"
-import { cn } from "@/lib/utils"
 
 const KIND_ICON: Record<LabKind, typeof GraduationCap> = {
   certification: GraduationCap,
@@ -36,7 +31,6 @@ function daysLeft(date: string | null) {
 
 export function LabsView() {
   const [labs, setLabs] = useState<LabInfo[] | null>(null)
-  const [creating, setCreating] = useState(false)
   const [aiOpen, setAiOpen] = useState(false)
   const [ai] = useAiSettings()
   const [opening, setOpening] = useState<string | null>(null)
@@ -86,7 +80,7 @@ export function LabsView() {
           <Button variant="outline" onClick={importFile}>
             <FileUp /> Import lab
           </Button>
-          <Button onClick={() => setCreating(true)}>
+          <Button onClick={startSetup}>
             <Plus /> New lab
           </Button>
         </div>
@@ -98,7 +92,7 @@ export function LabsView() {
       {!labs ? (
         <Loader2 className="mt-10 size-5 animate-spin text-ink-3" />
       ) : !labs.length ? (
-        <EmptyState onCreate={() => setCreating(true)} />
+        <EmptyState onCreate={startSetup} />
       ) : (
         <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {labs.map((l) => {
@@ -146,15 +140,6 @@ export function LabsView() {
         </div>
       )}
 
-      <CreateLabDialog
-        open={creating}
-        onOpenChange={setCreating}
-        onCreated={async (lab) => {
-          setCreating(false)
-          await open(lab.id)
-        }}
-      />
-
       <Dialog open={aiOpen} onOpenChange={setAiOpen}>
         <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-2xl">
           <DialogHeader>
@@ -185,8 +170,8 @@ function EmptyState({ onCreate }: { onCreate: () => void }) {
         <div className="flex-1 space-y-2">
           <p className="font-heading text-xl font-semibold">Create your first lab</p>
           <ol className="list-decimal space-y-1 pl-5 text-sm text-ink-2">
-            <li>Pick a template: an AWS exam, any certification, a language or a course.</li>
-            <li>Import content: the Markdown from the Udemy Study Export extension, or a Study Lab data folder.</li>
+            <li>Pick a template: a certification exam, a course, a language or any subject.</li>
+            <li>Import content: a Udemy Study Export, a content package, a Study Lab data folder or your own notes.</li>
             <li>
               Let the coach build topics, notes and flashcards, then study. It watches your time, repeated errors and confusions and turns them into a plan. <Sparkles className="inline size-3.5" />
             </li>
@@ -197,77 +182,5 @@ function EmptyState({ onCreate }: { onCreate: () => void }) {
         </Button>
       </CardContent>
     </Card>
-  )
-}
-
-function CreateLabDialog({ open, onOpenChange, onCreated }: { open: boolean; onOpenChange: (o: boolean) => void; onCreated: (lab: LabInfo) => void }) {
-  const [presets, setPresets] = useState<LabPreset[]>([])
-  const [preset, setPreset] = useState("certification")
-  const [name, setName] = useState("")
-  const [desc, setDesc] = useState("")
-  const [busy, setBusy] = useState(false)
-  useEffect(() => {
-    if (open) void api().presets().then(setPresets)
-  }, [open])
-  const p = presets.find((x) => x.id === preset)
-
-  async function create() {
-    setBusy(true)
-    try {
-      const lab = await api().createLab({ name: name.trim() || p?.name || "New lab", description: desc, preset })
-      setName("")
-      setDesc("")
-      onCreated(lab)
-    } catch (e) {
-      toast.error((e as Error).message)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-xl">
-        <DialogHeader>
-          <DialogTitle>New lab</DialogTitle>
-          <DialogDescription>Templates set the domains and exam format. You can change everything later in Settings → Lab setup.</DialogDescription>
-        </DialogHeader>
-        <div className="grid gap-2 sm:grid-cols-2">
-          {presets.map((x) => {
-            const Icon = KIND_ICON[x.kind]
-            return (
-              <button
-                key={x.id}
-                type="button"
-                onClick={() => setPreset(x.id)}
-                className={cn("flex gap-3 rounded-md border px-3 py-2.5 text-left transition-colors", preset === x.id ? "border-ink bg-surface-2" : "border-line hover:border-ink-3")}
-              >
-                <Icon className="mt-0.5 size-4 shrink-0" />
-                <span>
-                  <span className="block text-sm font-medium leading-tight">{x.name}</span>
-                  <span className="mt-0.5 block text-xs text-ink-3">{x.description}</span>
-                </span>
-              </button>
-            )
-          })}
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="new-lab-name">Name</Label>
-          <Input id="new-lab-name" value={name} onChange={(e) => setName(e.target.value)} placeholder={p?.name ?? "My lab"} autoFocus />
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="new-lab-desc">Goal (optional)</Label>
-          <Textarea id="new-lab-desc" rows={2} value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="e.g. Pass AIF-C01 in December with 800+; I study 1 hour on weekdays." />
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
-          <Button onClick={create} disabled={busy}>
-            {busy && <Loader2 className="animate-spin" />} Create lab
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   )
 }

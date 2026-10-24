@@ -7,9 +7,11 @@ import { runAnalyze, runChat, runGenerate, runPlan, chatTitle } from "./agent"
 import { runBuildKb } from "./buildkb"
 import { getSetting, openDb, setSetting } from "./db"
 import * as importers from "./importers"
+import { adapterList, importPreview, listSources, previewImport } from "./content/ingest"
 import { cancelJob, emit, isBusy, listJobs, setBroadcaster, startJob } from "./jobs"
 import { undo } from "./journal"
 import { applyMcp, mcpConfig, mcpStatus, saveMcpConfig } from "./mcp"
+import { cancelOAuth, connectOpenRouter } from "./oauth"
 import { chat, currentModel, keyHint, listModels, readKey, saveKey } from "./openrouter"
 import * as repo from "./repo"
 
@@ -42,15 +44,22 @@ const api: Api = {
   loadState: async (id) => repo.readState(id),
 
   /* import / export */
-  pickFiles: async (kind) => {
+  pickFiles: async (kind, extensions) => {
     const r = await dialog.showOpenDialog(win!, {
-      properties: kind === "dir" ? ["openDirectory"] : kind === "md" ? ["openFile", "multiSelections"] : ["openFile"],
-      filters: kind === "md" ? [{ name: "Markdown", extensions: ["md", "markdown", "txt"] }] : kind === "json" ? [{ name: "JSON", extensions: ["json"] }] : undefined,
+      properties: kind === "dir" ? ["openDirectory"] : kind === "files" ? ["openFile", "multiSelections"] : ["openFile"],
+      filters:
+        kind === "json"
+          ? [{ name: "JSON", extensions: ["json"] }]
+          : kind === "files" && extensions?.length
+            ? [{ name: extensions.map((e) => `.${e}`).join(", "), extensions }, { name: "All files", extensions: ["*"] }]
+            : undefined,
     })
     return r.canceled ? [] : r.filePaths
   },
-  importUdemy: async (labId, paths) => importers.importUdemy(labId, paths),
-  importBundle: async (labId, dir) => importers.importBundle(labId, dir),
+  contentAdapters: async () => adapterList(),
+  previewImport: async (paths, adapterId) => previewImport(paths, adapterId),
+  importPreview: async (labId, token) => importPreview(labId, token),
+  sources: async (labId) => listSources(labId),
   importProgress: async (labId, path) => importers.importProgress(labId, path),
   exportLab: async (labId) => {
     const lab = repo.getLab(labId)
@@ -91,6 +100,11 @@ const api: Api = {
     saveKey(key)
     return aiSettings()
   },
+  connectOpenRouter: async () => {
+    saveKey(await connectOpenRouter())
+    return aiSettings()
+  },
+  cancelConnect: async () => cancelOAuth(),
   updateAiSettings: async (patch) => {
     if (patch.model) setSetting("ai.model", patch.model.trim())
     if (patch.language) setSetting("ai.language", patch.language)

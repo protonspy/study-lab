@@ -2,6 +2,7 @@ import type { AppState, Domain, LabConfig, LabKind, Meta, Settings } from "./typ
 
 export const DEFAULT_SETTINGS: Settings = {
   examDate: null,
+  minutesPerDay: 45,
   newCards: 30,
   newQs: 15,
   sessionMax: 120,
@@ -43,60 +44,27 @@ export interface LabPreset {
   config: Partial<LabConfig>
 }
 
+/** Starting points for a lab. They are deliberately subject-agnostic: content and the coach fill in the rest. */
 export const PRESETS: LabPreset[] = [
-  {
-    id: "blank",
-    name: "Blank lab",
-    kind: "other",
-    description: "Start empty. Import content, or let the coach build topics from it.",
-    config: {},
-  },
   {
     id: "certification",
     name: "Certification exam",
     kind: "certification",
-    description: "A timed multiple-choice exam with a pass mark. Edit the numbers in Lab settings.",
+    description: "A timed multiple-choice exam with a pass mark. Set the exam format; domains come from your content or the exam guide.",
     config: { exam: { code: "EXAM", questions: 65, scored: 65, minutes: 90, pass: 700, min: 100, max: 1000 } },
   },
   {
-    id: "aif-c01",
-    name: "AWS Certified AI Practitioner (AIF-C01)",
-    kind: "certification",
-    description: "65 questions, 90 minutes, pass at 700 on a 100–1000 scale.",
-    config: {
-      domains: [
-        { n: 1, name: "Fundamentals of AI and ML", short: "AI & ML fundamentals", w: 20 },
-        { n: 2, name: "Fundamentals of Generative AI", short: "GenAI fundamentals", w: 24 },
-        { n: 3, name: "Applications of Foundation Models", short: "FM applications", w: 28 },
-        { n: 4, name: "Guidelines for Responsible AI", short: "Responsible AI", w: 14 },
-        { n: 5, name: "Security, Compliance & Governance for AI Solutions", short: "Security & governance", w: 14 },
-      ],
-      exam: { code: "AIF-C01", questions: 65, scored: 50, minutes: 90, pass: 700, min: 100, max: 1000, extraMinutes: 30, extraLabel: "ESL +30" },
-      sources: { ...DEFAULT_SOURCES, course: "Ultimate course" },
-    },
-  },
-  {
-    id: "aip-c01",
-    name: "AWS Certified Generative AI Developer – Professional (AIP-C01)",
-    kind: "certification",
-    description: "75 questions, 180 minutes, pass at 750 on a 100–1000 scale.",
-    config: {
-      domains: [
-        { n: 1, name: "Foundation Model Integration, Data Management & Compliance", short: "FM integration & data", w: 31 },
-        { n: 2, name: "Implementation & Integration", short: "Implementation", w: 26 },
-        { n: 3, name: "AI Safety, Security & Governance", short: "Safety & security", w: 20 },
-        { n: 4, name: "Operational Efficiency & Optimization", short: "Optimization", w: 12 },
-        { n: 5, name: "Testing, Validation & Troubleshooting", short: "Testing & troubleshooting", w: 11 },
-      ],
-      exam: { code: "AIP-C01", questions: 75, scored: 65, minutes: 180, pass: 750, min: 100, max: 1000, extraMinutes: 30, extraLabel: "ESL +30" },
-      sources: { ...DEFAULT_SOURCES, pack: "Practice pack", ult: "Ultimate course" },
-    },
+    id: "course",
+    name: "Course",
+    kind: "course",
+    description: "Lectures, readings and quizzes from an online course (Udemy, Coursera…). Topics come from the material.",
+    config: {},
   },
   {
     id: "language",
     name: "Language",
     kind: "language",
-    description: "Vocabulary, grammar and listening. Domains: vocabulary, grammar, reading, listening.",
+    description: "Vocabulary, grammar, reading and listening.",
     config: {
       domains: [
         { n: 1, name: "Vocabulary", short: "Vocabulary", w: 35 },
@@ -107,16 +75,23 @@ export const PRESETS: LabPreset[] = [
     },
   },
   {
-    id: "course",
-    name: "Online course",
-    kind: "course",
-    description: "Lectures and quizzes from a course, such as a Udemy export.",
+    id: "subject",
+    name: "Subject or skill",
+    kind: "other",
+    description: "A school subject, a book or a skill you are learning on your own.",
+    config: {},
+  },
+  {
+    id: "blank",
+    name: "Blank",
+    kind: "other",
+    description: "Start empty and set everything up yourself.",
     config: {},
   },
 ]
 
 export function presetConfig(id: string | undefined): { kind: LabKind; config: LabConfig } {
-  const p = PRESETS.find((x) => x.id === id) ?? PRESETS[0]
+  const p = PRESETS.find((x) => x.id === id) ?? PRESETS[PRESETS.length - 1]
   return { kind: p.kind, config: { ...emptyConfig(), ...structuredClone(p.config) } }
 }
 

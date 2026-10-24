@@ -206,6 +206,8 @@ export type Confidence = 0 | 1 | 2
 
 export interface Settings {
   examDate: string | null
+  /** daily study budget the planner schedules into */
+  minutesPerDay: number
   newCards: number
   newQs: number
   sessionMax: number
@@ -323,6 +325,8 @@ export interface StudyEvent {
 
 /* ---------- AI coach ---------- */
 
+export type HarnessFit = "ready" | "limited" | "unsupported"
+
 export interface ModelInfo {
   id: string
   name: string
@@ -332,6 +336,9 @@ export interface ModelInfo {
   outPrice: number
   tools: boolean
   structured: boolean
+  /** whether the coach's agent harness can run on it, and why not */
+  fit: HarnessFit
+  notes: string[]
 }
 
 export interface AiSettings {

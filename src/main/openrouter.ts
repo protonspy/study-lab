@@ -44,13 +44,38 @@ export function currentModel(): string {
 
 let modelCache: { at: number; list: ModelInfo[] } | null = null
 
+/** The agent harness needs tool calling and text output; it is happier with a wide context, forced tool choice and JSON mode. */
+export const MIN_CONTEXT = 64_000
+
+interface RawModel {
+  id: string
+  name: string
+  context_length: number
+  pricing: { prompt: string; completion: string }
+  supported_parameters?: string[]
+  architecture?: { output_modalities?: string[] }
+}
+
+export function harnessFit(m: RawModel): Pick<ModelInfo, "fit" | "notes" | "tools" | "structured"> {
+  const p = new Set(m.supported_parameters ?? [])
+  const tools = p.has("tools")
+  const structured = p.has("structured_outputs") || p.has("response_format")
+  const textOut = !m.architecture?.output_modalities || m.architecture.output_modalities.includes("text")
+  const notes: string[] = []
+  if (!tools) notes.push("no tool calling: the coach cannot read your data or act")
+  if (!textOut) notes.push("does not output text")
+  if (m.context_length < MIN_CONTEXT) notes.push(`small context (${Math.round(m.context_length / 1000)}k): long sessions get trimmed`)
+  if (tools && !p.has("tool_choice")) notes.push("cannot force a tool call")
+  if (!structured) notes.push("no JSON mode: knowledge-base building retries more often")
+  const fit = !tools || !textOut ? "unsupported" : notes.length ? "limited" : "ready"
+  return { fit, notes, tools, structured }
+}
+
 export async function listModels(force = false): Promise<ModelInfo[]> {
   if (!force && modelCache && Date.now() - modelCache.at < 3600_000) return modelCache.list
   const res = await fetch(`${BASE}/models`)
   if (!res.ok) throw new Error(`OpenRouter returned HTTP ${res.status} for the model list.`)
-  const body = (await res.json()) as {
-    data: { id: string; name: string; context_length: number; pricing: { prompt: string; completion: string }; supported_parameters?: string[] }[]
-  }
+  const body = (await res.json()) as { data: RawModel[] }
   const list = body.data
     .map((m) => ({
       id: m.id,
@@ -58,8 +83,7 @@ export async function listModels(force = false): Promise<ModelInfo[]> {
       context: m.context_length,
       inPrice: Number(m.pricing?.prompt ?? 0) * 1e6,
       outPrice: Number(m.pricing?.completion ?? 0) * 1e6,
-      tools: !!m.supported_parameters?.includes("tools"),
-      structured: !!m.supported_parameters?.includes("structured_outputs") || !!m.supported_parameters?.includes("response_format"),
+      ...harnessFit(m),
     }))
     .sort((a, b) => a.id.localeCompare(b.id))
   modelCache = { at: Date.now(), list }

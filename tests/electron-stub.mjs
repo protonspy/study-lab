@@ -4,5 +4,6 @@ export const safeStorage = {
   encryptString: (s) => Buffer.from(s),
   decryptString: (b) => b.toString(),
 }
-export const app = { getVersion: () => "test", getPath: () => "." }
-export default { safeStorage, app }
+export const app = { getVersion: () => "test", getPath: () => ".", isPackaged: false, getAppPath: () => process.cwd() }
+export const shell = { openExternal: async () => undefined }
+export default { safeStorage, app, shell }

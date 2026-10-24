@@ -1,3 +1,4 @@
+import { PACKAGE_FORMAT, PACKAGE_VERSION, type Assessment, type ContentPackage } from "./content-package"
 import type { Lecture, Question } from "./types"
 
 /*
@@ -154,4 +155,31 @@ export function parseLecturesMd(text: string): { course: string; lectures: Lectu
     if (cur && line && !/^_\(sem legenda.*\)_$/.test(line) && !/^_\(erro ao baixar.*\)_$/.test(line)) cur.p.push(line)
   }
   return { course: courseTitle(text), lectures }
+}
+
+/**
+ * Turn one course's Udemy Study Export files (questions and/or transcripts) into a content package.
+ * Ids reproduce the earlier importer's (u<hash>-<set>-<n>), so progress survives re-imports.
+ */
+export function udemyToPackage(files: { questions?: string; lectures?: string }): ContentPackage {
+  const q = files.questions ? parseQuestionsMd(files.questions) : null
+  const l = files.lectures ? parseLecturesMd(files.lectures) : null
+  const course = q?.course ?? l?.course ?? "Imported course"
+  const sets = new Map<string, Assessment>()
+  for (const x of q?.questions ?? []) {
+    const setIdx = x.id.split("-")[1]
+    let a = sets.get(setIdx)
+    if (!a) {
+      a = { id: setIdx, title: x.set, kind: x.kind === "exam" ? "exam" : "quiz", items: [] }
+      sets.set(setIdx, a)
+    }
+    a.items.push({ id: String(x.n), n: x.n, stem: x.stem, options: x.opts, answer: x.ans, rationales: x.why, explanation: x.explanation || undefined })
+  }
+  return {
+    format: PACKAGE_FORMAT,
+    version: PACKAGE_VERSION,
+    source: { adapter: "udemy-study-export", provider: "udemy", id: `u${shortHash(course)}`, title: course, language: l ? "en" : undefined },
+    documents: (l?.lectures ?? []).map((x) => ({ id: String(x.n), order: x.n, title: x.title, section: x.sec || undefined, kind: "transcript" as const, text: x.p.join("\n\n") })),
+    assessments: [...sets.values()],
+  }
 }

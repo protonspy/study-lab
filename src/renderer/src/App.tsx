@@ -25,7 +25,7 @@ import { Toaster } from "@/components/ui/sonner"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { Runner } from "@/components/Runner"
 import { LAB, useDataVersion } from "@/lib/data"
-import { closeLab, lastLabId, openLab, startEventBridge, useJobs, useOpenLab } from "@/lib/lab"
+import { closeLab, lastLabId, openLab, startEventBridge, startSetup, useJobs, useOpenLab, useSetup } from "@/lib/lab"
 import { go, useNav, type View } from "@/lib/nav"
 import { useAppState, useSaveError } from "@/lib/store"
 import { dueSummary } from "@/lib/stats"
@@ -45,6 +45,7 @@ import { LabsView } from "@/views/LabsView"
 import { CoachView } from "@/views/CoachView"
 import { AnalyticsView } from "@/views/AnalyticsView"
 import { ContentView } from "@/views/ContentView"
+import { SetupWizard } from "@/views/SetupWizard"
 
 type NavItem = { view: View; label: string; Icon: LucideIcon }
 
@@ -72,12 +73,23 @@ const LAB_NAV: NavItem[] = [
 
 export default function App() {
   const open = useOpenLab()
+  const setup = useSetup()
   const [booting, setBooting] = useState(true)
+  const [firstRun, setFirstRun] = useState(false)
 
   useEffect(() => {
     const stop = startEventBridge()
-    const last = lastLabId()
-    ;(last ? openLab(last).catch(() => undefined) : Promise.resolve()).finally(() => setBooting(false))
+    void (async () => {
+      const labs = await window.studyLab.api.listLabs()
+      if (!labs.length) {
+        setFirstRun(true)
+        startSetup()
+      } else {
+        const last = lastLabId()
+        if (last && labs.some((l) => l.id === last)) await openLab(last).catch(() => undefined)
+      }
+      setBooting(false)
+    })()
     return stop
   }, [])
 
@@ -87,6 +99,8 @@ export default function App() {
         <div className="flex min-h-dvh items-center justify-center">
           <Loader2 className="size-6 animate-spin text-ink-3" />
         </div>
+      ) : setup ? (
+        <SetupWizard firstRun={firstRun} />
       ) : open ? (
         <Shell key={open} />
       ) : (

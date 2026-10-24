@@ -1,4 +1,5 @@
 import type { LearnerSnapshot } from "./analytics"
+import type { PackageSummary } from "./content-package"
 import type { LabPreset } from "./defaults"
 import type {
   AiSettings,
@@ -27,6 +28,30 @@ export interface LectureHit {
   title: string
   sec: string
   snippet: string
+}
+
+export interface AdapterInfo {
+  id: string
+  name: string
+  description: string
+  pick: "files" | "directory"
+  extensions: string[]
+}
+
+export interface ImportPreview {
+  token: string
+  adapter: { id: string; name: string } | null
+  packages: PackageSummary[]
+  warnings: string[]
+}
+
+export interface SourceInfo {
+  id: string
+  adapter: string
+  provider: string
+  title: string
+  importedAt: number
+  stats: { documents: number; items: number }
 }
 
 export interface OpenedLab {
@@ -74,9 +99,12 @@ export interface Api {
   loadState(labId: string): Promise<AppState>
 
   /* import / export */
-  pickFiles(kind: "md" | "json" | "dir"): Promise<string[]>
-  importUdemy(labId: string, paths: string[]): Promise<ImportResult>
-  importBundle(labId: string, dir: string): Promise<ImportResult>
+  pickFiles(kind: "files" | "dir" | "json", extensions?: string[]): Promise<string[]>
+  contentAdapters(): Promise<AdapterInfo[]>
+  /** detect the format (or use adapterId), parse, and hold the result until importPreview */
+  previewImport(paths: string[], adapterId?: string): Promise<ImportPreview>
+  importPreview(labId: string, token: string): Promise<ImportResult>
+  sources(labId: string): Promise<SourceInfo[]>
   importProgress(labId: string, path: string): Promise<{ ok: boolean; error?: string }>
   exportLab(labId: string): Promise<string | null>
   importLabFile(path: string): Promise<LabInfo>
@@ -100,6 +128,9 @@ export interface Api {
   /* AI settings */
   aiSettings(): Promise<AiSettings>
   setAiKey(key: string | null): Promise<AiSettings>
+  /** OAuth PKCE: opens the browser, waits for consent, stores the new key */
+  connectOpenRouter(): Promise<AiSettings>
+  cancelConnect(): Promise<void>
   updateAiSettings(patch: { model?: string; language?: string; mcp?: { enabled?: boolean; port?: number; rotateToken?: boolean } }): Promise<AiSettings>
   listModels(force?: boolean): Promise<ModelInfo[]>
   testAi(): Promise<{ ok: boolean; message: string }>
@@ -136,8 +167,10 @@ export const API_METHODS = [
   "getContent",
   "loadState",
   "pickFiles",
-  "importUdemy",
-  "importBundle",
+  "contentAdapters",
+  "previewImport",
+  "importPreview",
+  "sources",
   "importProgress",
   "exportLab",
   "importLabFile",
@@ -151,6 +184,8 @@ export const API_METHODS = [
   "snapshot",
   "aiSettings",
   "setAiKey",
+  "connectOpenRouter",
+  "cancelConnect",
   "updateAiSettings",
   "listModels",
   "testAi",
