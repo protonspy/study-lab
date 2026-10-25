@@ -2,7 +2,7 @@
   "name": "study-lab",
   "productName": "Study Lab",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Desktop study workspace with spaced repetition, learning analytics and an AI study coach.",
   "license": "MIT",
   "main": "./out/main/index.js",

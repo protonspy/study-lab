@@ -85,6 +85,55 @@ const lexical: Embedder = {
   },
 }
 
+const MAX_ATTEMPTS = 6
+
+function wait(ms: number, signal?: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) return reject(new Error("Cancelled."))
+    const t = setTimeout(done, ms)
+    function done() {
+      signal?.removeEventListener("abort", stop)
+      resolve()
+    }
+    function stop() {
+      clearTimeout(t)
+      reject(new Error("Cancelled."))
+    }
+    signal?.addEventListener("abort", stop, { once: true })
+  })
+}
+
+/** Retry-After (seconds or an HTTP date) when the provider sends one, else exponential backoff with jitter, capped at 60 s. */
+export function backoffMs(attempt: number, retryAfter: string | null): number {
+  const secs = retryAfter != null ? Number(retryAfter) : NaN
+  const hinted = Number.isFinite(secs) ? secs * 1000 : retryAfter ? Date.parse(retryAfter) - Date.now() : NaN
+  if (Number.isFinite(hinted) && hinted > 0) return Math.min(hinted, 60_000)
+  return Math.min(2000 * 2 ** attempt, 60_000) * (0.75 + Math.random() * 0.5)
+}
+
+/**
+  One batch, retried on rate limits and server errors. A build can't fall back to lexical vectors halfway
+  (they live in another space), so a 429 mid-build is waited out instead of failing the whole job.
+*/
+async function postBatch(model: string, key: string, input: string[], signal?: AbortSignal) {
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch("https://openrouter.ai/api/v1/embeddings", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json", "HTTP-Referer": "https://github.com/protonspy/study-lab", "X-Title": "Study Lab" },
+      body: JSON.stringify({ model, input }),
+      signal,
+    })
+    if (res.ok) return (await res.json()) as { data?: { embedding: number[]; index: number }[]; usage?: { prompt_tokens?: number; cost?: number } }
+    const retryable = res.status === 429 || res.status >= 500
+    if (!retryable || attempt + 1 >= MAX_ATTEMPTS) {
+      if (res.status === 429) throw new Error(`Embeddings are rate-limited by OpenRouter (HTTP 429) after ${MAX_ATTEMPTS} tries. Wait a few minutes and build again.`)
+      if (res.status === 402) throw new Error("Your OpenRouter account is out of credits.")
+      throw new Error(`Embeddings failed: HTTP ${res.status}`)
+    }
+    await wait(backoffMs(attempt, res.headers.get("retry-after")), signal)
+  }
+}
+
 function modelEmbedder(model: string, key: string, labId: string | null): Embedder {
   return {
     kind: "model",
@@ -94,14 +143,7 @@ function modelEmbedder(model: string, key: string, labId: string | null): Embedd
       const out: Float32Array[] = []
       for (let i = 0; i < texts.length; i += 64) {
         const batch = texts.slice(i, i + 64).map((t) => t.slice(0, 6000) || " ")
-        const res = await fetch("https://openrouter.ai/api/v1/embeddings", {
-          method: "POST",
-          headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json", "HTTP-Referer": "https://github.com/protonspy/study-lab", "X-Title": "Study Lab" },
-          body: JSON.stringify({ model, input: batch }),
-          signal,
-        })
-        if (!res.ok) throw new Error(`Embeddings failed: HTTP ${res.status}`)
-        const body = (await res.json()) as { data?: { embedding: number[]; index: number }[]; usage?: { prompt_tokens?: number; cost?: number } }
+        const body = await postBatch(model, key, batch, signal)
         if (!body.data?.length) throw new Error("Embeddings returned no vectors.")
         const sorted = [...body.data].sort((a, b) => a.index - b.index)
         for (const d of sorted) out.push(normalize(Float32Array.from(d.embedding)))
