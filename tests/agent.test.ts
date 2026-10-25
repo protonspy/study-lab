@@ -21,7 +21,7 @@ const fixtures = join(import.meta.dirname, "fixtures")
 const dir = mkdtempSync(join(tmpdir(), "study-lab-agent-"))
 let labId = ""
 
-type Reply = { content?: string | null; tool_calls?: { name: string; args: unknown }[] }
+type Reply = { content?: string | null; tool_calls?: { name: string; args: unknown }[]; finish?: string }
 let script: Reply[] = []
 let requests: { messages: { role: string; content: string | null; tool_calls?: unknown[]; tool_call_id?: string }[]; tools?: { function: { name: string } }[]; response_format?: unknown }[] = []
 const realFetch = globalThis.fetch
@@ -52,7 +52,7 @@ before(async () => {
       content: next.content ?? null,
       tool_calls: next.tool_calls?.map((t) => ({ id: `call_${requests.length}_${n++}`, type: "function", function: { name: t.name, arguments: JSON.stringify(t.args) } })),
     }
-    return new Response(JSON.stringify({ id: `gen-${requests.length}`, model: body.model, choices: [{ message, finish_reason: "stop" }], usage: { prompt_tokens: 100, completion_tokens: 20, cost: 0.0001 } }))
+    return new Response(JSON.stringify({ id: `gen-${requests.length}`, model: body.model, choices: [{ message, finish_reason: next.finish ?? "stop" }], usage: { prompt_tokens: 100, completion_tokens: 20, cost: 0.0001 } }))
   }) as typeof fetch
 })
 
@@ -89,13 +89,18 @@ describe("knowledge base builder", () => {
             { n: 1, name: "Storage", short: "Storage", w: 60 },
             { n: 2, name: "Security", short: "Security", w: 40 },
           ],
+        }),
+      },
+      {
+        // Concepts arrive numbered in course order: 0 welcome (lecture 1), 1 object storage, 2 encryption.
+        content: JSON.stringify({
           topics: [
             { id: "storage", title: "Storage", domain: 1, covers: "Buckets" },
             { id: "security", title: "Security", domain: 2, covers: "Encryption" },
           ],
           assign: [
-            { kc: "kc-object-storage", topic: "storage" },
-            { kc: "kc-encryption-at-rest", topic: "security" },
+            { i: 1, topic: "storage" },
+            { i: 2, topic: "security" },
           ],
         }),
       },
@@ -130,7 +135,34 @@ describe("knowledge base builder", () => {
     // Grounding: each topic keeps only the card citing its own chunk.
     assert.deepEqual(c.kb.cards.map((x) => [x.t, x.f]).sort(), [["security", "At rest?"], ["storage", "Bucket?"]])
     assert.match(repo.listChanges(labId)[0].summary, /knowledge graph/)
-    assert.equal(requests.length, 5)
+    assert.equal(requests.length, 6)
+  })
+
+  it("organises thousands of concepts in windows and resumes a failed build without paying for extraction again", async () => {
+    const big = repo.createLab({ name: "Big course", preset: "certification" }).id
+    await importUdemy(big, [join(fixtures, "sample-simulados.md"), join(fixtures, "sample-transcricoes.md")])
+    // Every word unique to its concept, so the lexical embedder keeps all 250 apart.
+    const w = (i: number, s: string) => `w${i.toString(36).padStart(3, "0")}${s}`
+    const many = Array.from({ length: 250 }, (_, i) => ({ name: w(i, "n"), definition: `${w(i, "a")} ${w(i, "b")} ${w(i, "c")}`, kind: "fact", chunks: ["3:0"] }))
+    const domains = { content: JSON.stringify({ domains: [{ n: 1, name: "All", short: "All", w: 100 }] }) }
+    // First run: extraction succeeds, then the organise answer is cut off at the token limit.
+    script = [{ content: JSON.stringify({ concepts: many }) }, domains, { content: '{"topics": [', finish: "length" }]
+    await assert.rejects(runBuildKb(big, job(), { cardsPerTopic: 0, keep: false }), /cut off at its 8000-token limit/)
+    assert.equal(requests.length, 3, "a cut-off answer is not retried")
+    const organised = (n: number, from: number) => ({ content: JSON.stringify({ topics: [{ id: `t${from}`, title: `T${from}`, domain: 1, covers: "" }], assign: Array.from({ length: n }, (_, i) => ({ i, topic: `t${from}` })) }) })
+    const notes = { content: JSON.stringify({ summary: [], keyPoints: [], examTips: [], pitfalls: [], mnemonics: [], cards: [] }) }
+    // Second run: extraction comes from the checkpoint, and 250 concepts go in two organise windows.
+    requests = []
+    script = [domains, organised(200, 0), organised(50, 200), { content: JSON.stringify({ items: [] }) }, notes, notes]
+    await runBuildKb(big, job(), { cardsPerTopic: 0, keep: false })
+    assert.ok(!requests.some((r) => r.messages.some((m) => m.content?.includes("List the knowledge components"))), "extraction is not paid for twice")
+    const organise = requests.filter((r) => r.messages.some((m) => m.content?.includes("Organise these knowledge components")))
+    assert.equal(organise.length, 2)
+    assert.match(organise[1].messages.at(-1)!.content!, /Existing topics: .*t0: T0/)
+    const g = repo.readContent(big).graph
+    assert.equal(g.kcs.length, 250)
+    assert.equal(g.kcs.filter((k) => k.topic === "t0").length, 200)
+    assert.equal(g.kcs.filter((k) => k.topic === "t200").length, 50)
   })
 
   it("breaks prerequisite cycles at their weakest edge", async () => {

@@ -108,7 +108,7 @@ export function backoffMs(attempt: number, retryAfter: string | null): number {
   const secs = retryAfter != null ? Number(retryAfter) : NaN
   const hinted = Number.isFinite(secs) ? secs * 1000 : retryAfter ? Date.parse(retryAfter) - Date.now() : NaN
   if (Number.isFinite(hinted) && hinted > 0) return Math.min(hinted, 60_000)
-  return Math.min(2000 * 2 ** attempt, 60_000) * (0.75 + Math.random() * 0.5)
+  return Math.min(2000 * 2 ** attempt * (0.75 + Math.random() * 0.5), 60_000)
 }
 
 /**

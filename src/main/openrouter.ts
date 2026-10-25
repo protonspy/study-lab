@@ -270,6 +270,8 @@ export async function chatJson<T>(req: Omit<ChatRequest, "json"> & { schema: { n
   for (let attempt = 0; attempt < 2; attempt++) {
     const res = await chat({ ...rest, messages, json: schema })
     usage = { tokensIn: usage.tokensIn + res.usage.tokensIn, tokensOut: usage.tokensOut + res.usage.tokensOut, cost: usage.cost + res.usage.cost }
+    // A cut-off answer is broken JSON, and asking again would hit the same limit at the same price.
+    if (res.finish === "length") throw new AiError(`The model's answer for ${schema.name} was cut off at its ${rest.maxTokens ?? "output"}-token limit.`)
     try {
       return { data: parseJson<T>(res.message.content), usage, model: res.model }
     } catch (e) {

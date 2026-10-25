@@ -264,6 +264,16 @@ const MIGRATIONS: string[] = [
     PRIMARY KEY (lab_id, qid, option)
   );
   `,
+  // v4: knowledge-base build checkpoints, so a failed build resumes without paying for extraction again
+  `
+  CREATE TABLE kb_cache (
+    lab_id TEXT NOT NULL REFERENCES labs(id) ON DELETE CASCADE,
+    key TEXT NOT NULL,
+    data TEXT NOT NULL,
+    at INTEGER NOT NULL,
+    PRIMARY KEY (lab_id, key)
+  );
+  `,
 ]
 
 let db: DatabaseSync | null = null

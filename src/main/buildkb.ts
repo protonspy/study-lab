@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto"
 import type { BuildKbOptions } from "@shared/api"
 import { GENERAL_DOMAIN } from "@shared/defaults"
 import type { Card, CardKind, Domain, GraphEdge, Kc, Question, Topic } from "@shared/types"
@@ -7,7 +8,7 @@ import { cosine, getEmbedder, toBlob } from "./embeddings"
 import * as graph from "./graph"
 import { emit, type JobHandle } from "./jobs"
 import { Change } from "./journal"
-import { chatJson } from "./openrouter"
+import { chatJson, currentModel } from "./openrouter"
 import * as repo from "./repo"
 
 /*
@@ -153,9 +154,16 @@ export async function runBuildKb(labId: string, job: JobHandle, o: BuildKbOption
   if (cur.length) groups.push(cur)
   const candidates: Candidate[] = []
   let doneGroups = 0
+  const model = currentModel()
   await pool(groups, 3, async (g) => {
     if (job.signal.aborted) return
-    const data = await ask<{ concepts: { name: string; definition: string; kind: string; chunks: string[]; relies_on: string[] }[] }>(
+    type Extracted = { concepts: { name: string; definition: string; kind: string; chunks: string[]; relies_on: string[] }[] }
+    // Checkpoint: the same chunks, model and guidance reuse the answer a failed earlier build already paid for.
+    const key = createHash("sha256")
+      .update(`${model}\n${o.instructions ?? ""}\n${g.map((c) => `${c.id}\n${c.text}`).join("\n")}`)
+      .digest("hex")
+    const cached = one<{ data: string }>("SELECT data FROM kb_cache WHERE lab_id = ? AND key = ?", labId, key)
+    const data: Extracted = cached ? JSON.parse(cached.data) : await ask<Extracted>(
       "extract",
       {
         type: "object",
@@ -183,6 +191,7 @@ ${o.instructions ? `Learner's guidance: ${o.instructions}\n` : ""}
 ${g.map((c) => `[chunk ${c.id}] (${c.context})\n${c.text}`).join("\n\n")}`,
       10_000,
     )
+    if (!cached) run("INSERT OR REPLACE INTO kb_cache(lab_id, key, data, at) VALUES(?, ?, ?, ?)", labId, key, JSON.stringify(data), Date.now())
     const valid = new Set(g.map((c) => c.id))
     for (const k of data.concepts ?? []) {
       if (!k?.name || !k.definition) continue
@@ -274,37 +283,55 @@ ${batch.map((g, j) => `${j}. A: ${g.cand.name} — ${g.cand.definition}\n   B: $
   }
   job.step(`${kcs.size} concepts after merging duplicates…`, 0.45)
 
-  /* 4. organise concepts into topics and domains */
+  /*
+    4. organise concepts into topics and domains. A large course yields thousands of concepts, and one
+    answer assigning them all outgrows any output limit, so concepts go in windows, in course order,
+    and each window reuses the topics the earlier ones created.
+  */
   const generalOnly = cfg.domains.length === 1 && cfg.domains[0].name === GENERAL_DOMAIN.name
-  const unplaced = [...kcs.values()].filter((k) => !k.topic)
+  const unplaced = [...kcs.values()].filter((k) => !k.topic).sort((a, b) => (a.firstLecture ?? 0) - (b.firstLecture ?? 0))
   const topicsBefore = repo.readTopics(labId)
   if (unplaced.length) {
-    const data = await ask<{ domains?: Domain[]; topics: { id: string; title: string; domain: number; covers: string }[]; assign: { kc: string; topic: string }[] }>(
-      "organise",
-      {
-        type: "object",
-        properties: {
-          domains: { type: "array", items: { type: "object", properties: { n: { type: "number" }, name: { type: "string" }, short: { type: "string" }, w: { type: "number" } }, required: ["n", "name", "short", "w"] } },
-          topics: { type: "array", items: { type: "object", properties: { id: { type: "string" }, title: { type: "string" }, domain: { type: "number" }, covers: { type: "string" } }, required: ["id", "title", "domain", "covers"] } },
-          assign: { type: "array", items: { type: "object", properties: { kc: { type: "string" }, topic: { type: "string" } }, required: ["kc", "topic"] } },
-        },
-        required: ["topics", "assign"],
-      },
-      `Organise these knowledge components into topics (groups of 3–15 closely related concepts a learner studies together) and assign every concept to exactly one topic.
-${generalOnly ? "The lab has no real domains yet: also propose 3–6 domains (n from 1, short label, exam weight % summing to 100 — the official exam guide's weights if you know them, otherwise by how much material each covers)." : `Domains (keep them): ${cfg.domains.map((d) => `D${d.n} ${d.name}`).join("; ")}.`}
-${topicsBefore.length ? `Existing topics (reuse their ids where they fit): ${topicsBefore.map((t) => `${t.id}: ${t.title} (D${t.d})`).join("; ")}` : ""}
-Return topic ids in kebab-case.${o.instructions ? `\nLearner's guidance: ${o.instructions}` : ""}
+    const guidance = o.instructions ? `\nLearner's guidance: ${o.instructions}` : ""
+    let domains = cfg.domains
+    let proposed: Domain[] | null = null
+    if (generalOnly) {
+      job.step("Proposing domains…", 0.46)
+      const d = await ask<{ domains: Domain[] }>(
+        "domains",
+        { type: "object", properties: { domains: { type: "array", items: { type: "object", properties: { n: { type: "number" }, name: { type: "string" }, short: { type: "string" }, w: { type: "number" } }, required: ["n", "name", "short", "w"] } } }, required: ["domains"] },
+        `Propose 3–6 domains for this material: n from 1, a short label, and an exam weight % summing to 100 (the official exam guide's weights if you know them, otherwise by how much material each covers).${guidance}
 
-${unplaced.map((k) => `${k.id} | ${k.name} — ${k.definition.slice(0, 120)} (lecture ${k.firstLecture ?? "?"})`).join("\n")}`,
-      12_000,
-    )
-    tx(() => {
-      if (generalOnly && data.domains?.length) {
-        ch.config()
-        repo.updateLab(labId, { config: { domains: data.domains.slice(0, 8).map((d, i) => ({ n: i + 1, name: String(d.name), short: String(d.short || d.name).slice(0, 40), w: Number(d.w) || 0 })) } })
-      }
-      const domains = repo.getConfig(labId).domains
-      const known = new Map(topicsBefore.map((t) => [t.id, t]))
+Concepts, in course order:
+${unplaced.map((k) => k.name.slice(0, 80)).join("\n")}`,
+        2000,
+      )
+      if (d.domains?.length) domains = proposed = d.domains.slice(0, 8).map((x, i) => ({ n: i + 1, name: String(x.name), short: String(x.short || x.name).slice(0, 40), w: Number(x.w) || 0 }))
+    }
+    const known = new Map(topicsBefore.map((t) => [t.id, t]))
+    const created: Topic[] = []
+    const WINDOW = 200
+    for (let i = 0; i < unplaced.length; i += WINDOW) {
+      if (job.signal.aborted) return
+      const win = unplaced.slice(i, i + WINDOW)
+      job.step(`Organising concepts into topics (${Math.min(i + WINDOW, unplaced.length)}/${unplaced.length})…`, 0.46 + 0.04 * (i / unplaced.length))
+      const data = await ask<{ topics: { id: string; title: string; domain: number; covers: string }[]; assign: { i: number; topic: string }[] }>(
+        "organise",
+        {
+          type: "object",
+          properties: {
+            topics: { type: "array", items: { type: "object", properties: { id: { type: "string" }, title: { type: "string" }, domain: { type: "number" }, covers: { type: "string" } }, required: ["id", "title", "domain", "covers"] } },
+            assign: { type: "array", items: { type: "object", properties: { i: { type: "number" }, topic: { type: "string" } }, required: ["i", "topic"] } },
+          },
+          required: ["topics", "assign"],
+        },
+        `Organise these knowledge components into topics (groups of 3–15 closely related concepts a learner studies together) and assign every concept, by its number, to exactly one topic. Reuse an existing topic when a concept fits it; otherwise create one. Return only the topics you create, with kebab-case ids.
+Domains: ${domains.map((d) => `D${d.n} ${d.name}`).join("; ")}.
+Existing topics: ${known.size ? [...known.values()].map((t) => `${t.id}: ${t.title} (D${t.d})`).join("; ") : "none yet"}${guidance}
+
+${win.map((k, j) => `${j} | ${k.name} — ${k.definition.slice(0, 100)} (lecture ${k.firstLecture ?? "?"})`).join("\n")}`,
+        8000,
+      )
       for (const t of data.topics ?? []) {
         const id = slug(t.id || t.title)
         if (!id || known.has(id)) continue
@@ -320,14 +347,23 @@ ${unplaced.map((k) => `${k.id} | ${k.name} — ${k.definition.slice(0, 120)} (le
           tables: [],
           lectures: [],
         }
-        ch.topic(id)
-        repo.upsertTopic(labId, topic)
         known.set(id, topic)
+        created.push(topic)
       }
       for (const a of data.assign ?? []) {
-        const k = kcs.get(a.kc)
-        const tid = slug(a.topic)
+        const k = win[Number(a.i)]
+        const tid = slug(String(a.topic ?? ""))
         if (k && known.has(tid)) k.topic = tid
+      }
+    }
+    tx(() => {
+      if (proposed) {
+        ch.config()
+        repo.updateLab(labId, { config: { domains: proposed } })
+      }
+      for (const t of created) {
+        ch.topic(t.id)
+        repo.upsertTopic(labId, t)
       }
       // Anything the model skipped goes to the topic of its most similar placed concept.
       for (const k of kcs.values()) {
@@ -644,6 +680,7 @@ ${material || "(no transcript for this topic — rely on the concept definitions
 
   function finish() {
     tx(() => {
+      run("DELETE FROM kb_cache WHERE lab_id = ?", labId)
       repo.setBuilt(labId)
       const n = one<{ n: number }>("SELECT COUNT(*) n FROM kcs WHERE lab_id = ? AND status = 'active'", labId)?.n ?? 0
       ch.commit(`Built the knowledge graph: ${n} concepts, their topics, relations, question tags, notes and flashcards (${embedder.kind === "model" ? embedder.model : "lexical similarity"})`)
