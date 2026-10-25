@@ -11,6 +11,7 @@ extraResources:
   - from: resources/skills
     to: skills
 win:
+  icon: resources/icon.ico
   target:
     - target: nsis
       arch: [x64]
