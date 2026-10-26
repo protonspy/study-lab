@@ -44,13 +44,14 @@ Cada **lab** é um espaço de estudo independente: uma certificação, um curso,
 - **Visualizações** ([por quê](docs/visualization.md)):
   - **Performance**: nota prevista como quantile dotplot; mapa de domínio com incerteza e "fantasma" de 14 dias atrás; retenção até a prova; calibração; velocidade × acerto.
   - **Timeline**: trilhas alinhadas de atividade, nota prevista com simulados, marcos e adesão ao plano; calendário; evolução por domínio.
-  - **Concept map** (Cytoscape): tópicos que se expandem em conceitos; modos pré-requisitos e confusões; busca; painel de detalhes; visão em tabela.
+  - **Concept map** (reagraph, WebGL na GPU dedicada quando houver): tópicos que se expandem em conceitos, agrupados em clusters; modos pré-requisitos (DAG) e confusões; busca; painel de detalhes; visão em tabela.
 - **Coach** no Claude Code (com a sua conta) ou no DeepAgents (LangChain, com o OpenRouter). Os dois têm:
   - planejamento, sistema de arquivos de rascunho e subagentes (learning-analyst, content-author);
   - **skills** em SKILL.md: 7 nativas, mais as suas;
   - **conexões MCP externas** (HTTP ou comando local) por lab;
   - ferramentas do lab com diário de alterações e **desfazer**.
 - **Servidor MCP local** (opcional): as mesmas ferramentas ficam disponíveis para Claude Desktop, Claude Code, Cursor e outros, com um endpoint por lab.
+- **Tabelas e listas paginadas** (25, 50 ou 100 por página): material, analytics, mapa de conceitos, busca na biblioteca, erros e flashcards.
 - **Tudo local**: SQLite (`node:sqlite`). O único módulo nativo é o `onnxruntime-node`, do modelo de embedding. A chave do OpenRouter fica criptografada com `safeStorage`.
 
 ## Rodar

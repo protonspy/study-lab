@@ -1,4 +1,4 @@
-import { Component, useEffect, useMemo, useState, type ReactNode } from "react"
+import { Component, lazy, Suspense, useEffect, useMemo, useState, type ReactNode } from "react"
 import {
   BarChart3,
   BookOpen,
@@ -51,7 +51,9 @@ import { ContentView } from "@/views/ContentView"
 import { SetupWizard } from "@/views/SetupWizard"
 import { PerformanceView } from "@/views/PerformanceView"
 import { TimelineView } from "@/views/TimelineView"
-import { ConceptMapView } from "@/views/ConceptMapView"
+
+// The concept map brings WebGL (three.js, reagraph): loaded when first opened, not at startup.
+const ConceptMapView = lazy(() => import("@/views/ConceptMapView").then((m) => ({ default: m.ConceptMapView })))
 
 type NavItem = { view: View; label: string; Icon: LucideIcon }
 
@@ -233,7 +235,11 @@ function CurrentView({ view }: { view: View }) {
     case "timeline":
       return <TimelineView />
     case "graph":
-      return <ConceptMapView />
+      return (
+        <Suspense fallback={<Loader2 className="size-5 animate-spin text-ink-3" />}>
+          <ConceptMapView />
+        </Suspense>
+      )
     case "analytics":
       return <AnalyticsView />
     case "content":

@@ -3,6 +3,7 @@ import { ArrowDownRight, ArrowRight, ArrowUpRight, Loader2, Play, Repeat2, Shuff
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { DomainDot } from "@/components/Domain"
+import { Pager, usePaged } from "@/components/Pager"
 import { Meter } from "@/components/charts"
 import { TOPIC_STATE_LABEL, type LearnerSnapshot, type TopicReport, type TopicState } from "@shared/analytics"
 import { data, LAB, useDataVersion } from "@/lib/data"
@@ -60,6 +61,7 @@ export function AnalyticsView() {
     const rank: Record<TopicState, number> = { weak: 0, learning: 1, new: 2, solid: 3, mastered: 4 }
     return t.sort((a, b) => rank[a.state] - rank[b.state] || a.mastery - b.mastery)
   }, [snap, sort])
+  const page = usePaged(topics, { reset: sort })
 
   if (err) return <p className="text-bad">{err}</p>
   if (!snap) return <Loader2 className="size-5 animate-spin text-ink-3" />
@@ -198,11 +200,12 @@ export function AnalyticsView() {
               </tr>
             </thead>
             <tbody className="divide-y divide-line">
-              {topics.map((t) => (
+              {page.rows.map((t) => (
                 <TopicRow key={t.id} t={t} />
               ))}
             </tbody>
           </table>
+          <Pager p={page} className="mt-3" />
         </CardContent>
       </Card>
 

@@ -11,6 +11,7 @@ import { startCoachJob } from "@/components/Jobs"
 import { Markdown } from "@/components/Markdown"
 import { Meter } from "@/components/charts"
 import { DomainDot, DomainLabel } from "@/components/Domain"
+import { Pager, usePaged } from "@/components/Pager"
 import { setNote } from "@/lib/actions"
 import { data, DOMAINS, LAB, loadLectures } from "@/lib/data"
 import { go, run, useNav } from "@/lib/nav"
@@ -346,6 +347,7 @@ function PointList({ title, items, recall, icon, compact }: { title: string; ite
 }
 
 function CompareTable({ tb }: { tb: NoteTable }) {
+  const page = usePaged(tb.rows)
   return (
     <div>
       {tb.title && <p className="mb-1.5 text-sm font-medium">{tb.title}</p>}
@@ -361,7 +363,7 @@ function CompareTable({ tb }: { tb: NoteTable }) {
             </tr>
           </thead>
           <tbody>
-            {tb.rows.map((r, i) => (
+            {page.rows.map((r, i) => (
               <tr key={i} className="border-t border-line bg-surface align-top">
                 {r.map((c, j) => (
                   <td key={j} className={cn("px-3 py-2", j === 0 ? "font-medium" : "text-ink-2")}>
@@ -373,6 +375,7 @@ function CompareTable({ tb }: { tb: NoteTable }) {
           </tbody>
         </table>
       </div>
+      <Pager p={page} className="mt-2" />
     </div>
   )
 }

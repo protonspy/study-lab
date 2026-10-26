@@ -321,6 +321,10 @@ function createWindow() {
   else void win.loadFile(join(__dirname, "../renderer/index.html"))
 }
 
+// The concept map draws in WebGL: on a machine with an integrated and a discrete GPU, use the
+// discrete one (Chromium otherwise picks per its own power heuristics).
+app.commandLine.appendSwitch("force_high_performance_gpu")
+
 if (!app.requestSingleInstanceLock()) app.quit()
 else {
   app.on("second-instance", () => {

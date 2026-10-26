@@ -5,6 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { Meter } from "@/components/charts"
 import { DomainDot } from "@/components/Domain"
+import { Pager, usePaged } from "@/components/Pager"
 import { data, DOMAINS } from "@/lib/data"
 import { run } from "@/lib/nav"
 import { STRENGTH_LABEL, strength } from "@/lib/srs"
@@ -58,7 +59,7 @@ export function CardsView({ kindsDefault = "cards" as Kinds }: { kindsDefault?: 
         (!filter.domain || data().topicById.get(c.t)?.d === filter.domain),
     )
   }, [browse, kinds, scope]) // eslint-disable-line react-hooks/exhaustive-deps
-  const [shown, setShown] = useState(60)
+  const page = usePaged(browseList, { size: 50, reset: [kinds, scope].join("|") })
 
   const title = kinds === "cues" ? "Exam cues" : "Flashcards"
 
@@ -175,7 +176,7 @@ export function CardsView({ kindsDefault = "cards" as Kinds }: { kindsDefault?: 
             {plural(browseList.length, "card")} in {scopeLabel(scope)}
           </h2>
           <div className="grid gap-3 md:grid-cols-2">
-            {browseList.slice(0, shown).map((c) => (
+            {page.rows.map((c) => (
               <div key={c.id} className="rounded-lg border border-line bg-surface p-3.5 text-sm">
                 <p className="font-medium">{c.k === "trigger" ? `“${c.f}”` : c.f}</p>
                 <p className="mt-1.5 text-ink-2">{c.b}</p>
@@ -185,11 +186,7 @@ export function CardsView({ kindsDefault = "cards" as Kinds }: { kindsDefault?: 
               </div>
             ))}
           </div>
-          {shown < browseList.length && (
-            <Button variant="outline" className="mt-4" onClick={() => setShown((n) => n + 60)}>
-              Show more
-            </Button>
-          )}
+          <Pager p={page} className="mt-4" />
         </section>
       )}
     </div>

@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { DomainLabel } from "@/components/Domain"
+import { Pager, usePaged } from "@/components/Pager"
 import { MISTAKE_REASONS, QuestionCard } from "@/components/QuestionCard"
 import { data } from "@/lib/data"
 import { run } from "@/lib/nav"
@@ -39,6 +40,7 @@ export function MistakesView() {
       .filter((x) => (!f.domain || x.q!.d === f.domain) && (!f.topic || (data().kb.tags[x.id] ?? []).includes(f.topic)))
       .sort((a, b) => b.r!.h - a.r!.h || b.m.at - a.m.at)
   }, [s, state, reason, scope])
+  const page = usePaged(rows, { reset: [state, reason, scope].join("|") })
 
   const counts = useMemo(() => {
     const c: Record<string, number> = {}
@@ -139,7 +141,7 @@ export function MistakesView() {
       </div>
 
       <div className="mt-4 flex flex-col gap-2">
-        {rows.map(({ id, m, q, r }) => (
+        {page.rows.map(({ id, m, q, r }) => (
           <div key={id} className="rounded-lg border border-line bg-surface">
             <button type="button" className="flex w-full items-start gap-3 px-3.5 py-3 text-left" onClick={() => setOpen((o) => (o === id ? null : id))} aria-expanded={open === id}>
               <span className="min-w-0 flex-1">
@@ -168,6 +170,7 @@ export function MistakesView() {
           </div>
         ))}
         {!rows.length && <p className="py-10 text-center text-sm text-ink-3">No mistakes in this view.</p>}
+        <Pager p={page} className="mt-2" />
       </div>
     </div>
   )

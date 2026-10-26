@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { DomainLabel, TopicChip } from "@/components/Domain"
+import { Pager, usePaged } from "@/components/Pager"
 import { QuestionCard } from "@/components/QuestionCard"
 import { data, loadLectures, shortSetName } from "@/lib/data"
 import { go, run, useNav } from "@/lib/nav"
@@ -138,13 +139,13 @@ function Questions({ q }: { q: string }) {
     if (needle.length < 3) return []
     return data()
       .questions.filter((x) => x.stem.toLowerCase().includes(needle) || x.opts.some((o) => o.toLowerCase().includes(needle)) || x.explanation.toLowerCase().includes(needle))
-      .slice(0, 60)
   }, [needle])
+  const page = usePaged(hits, { reset: needle })
   if (needle.length < 3) return <p className="text-sm text-ink-3">Type at least three characters to search {data().questions.length} questions.</p>
   return (
     <div className="flex flex-col gap-2">
-      <p className="text-sm text-ink-3">{plural(hits.length, "question")}{hits.length === 60 ? " (first 60)" : ""}</p>
-      {hits.map((x) => (
+      <p className="text-sm text-ink-3">{plural(hits.length, "question")}</p>
+      {page.rows.map((x) => (
         <div key={x.id} className="rounded-lg border border-line bg-surface">
           <button type="button" className="w-full px-3.5 py-3 text-left" onClick={() => setOpen((o) => (o === x.id ? null : x.id))}>
             <span className="flex flex-wrap items-center gap-2 text-xs text-ink-3">
@@ -164,6 +165,7 @@ function Questions({ q }: { q: string }) {
           )}
         </div>
       ))}
+      <Pager p={page} />
     </div>
   )
 }
@@ -174,13 +176,13 @@ function Cards({ q }: { q: string }) {
     if (needle.length < 3) return []
     return data()
       .cards.filter((c) => c.f.toLowerCase().includes(needle) || c.b.toLowerCase().includes(needle))
-      .slice(0, 100)
   }, [needle])
+  const page = usePaged(hits, { size: 50, reset: needle })
   if (needle.length < 3) return <p className="text-sm text-ink-3">Type at least three characters to search {data().cards.length.toLocaleString()} cards.</p>
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-3">
-        <p className="text-sm text-ink-3">{plural(hits.length, "card")}{hits.length === 100 ? " (first 100)" : ""}</p>
+        <p className="text-sm text-ink-3">{plural(hits.length, "card")}</p>
         {hits.length > 0 && (
           <Button size="sm" variant="outline" onClick={() => run(`Cards matching “${q.trim()}”`, hits.slice(0, 40).map((c) => ({ kind: "c" as const, id: c.id })), "library")}>
             Study these
@@ -188,7 +190,7 @@ function Cards({ q }: { q: string }) {
         )}
       </div>
       <div className="grid gap-3 md:grid-cols-2">
-        {hits.map((c) => (
+        {page.rows.map((c) => (
           <div key={c.id} className="rounded-lg border border-line bg-surface p-3.5 text-sm">
             <p className="font-medium">
               <MarkQuery text={c.k === "trigger" ? `“${c.f}”` : c.f} q={q} />
@@ -202,6 +204,7 @@ function Cards({ q }: { q: string }) {
           </div>
         ))}
       </div>
+      <Pager p={page} />
     </div>
   )
 }

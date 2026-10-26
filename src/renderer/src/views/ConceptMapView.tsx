@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import cytoscape, { type Core, type ElementDefinition } from "cytoscape"
-import fcose from "cytoscape-fcose"
-import dagre from "cytoscape-dagre"
+import { GraphCanvas, Ring, Sphere, type GraphCanvasRef, type GraphEdge, type GraphNode, type InternalGraphPosition, type NodeRendererProps, type Theme } from "reagraph"
+import dagre from "@dagrejs/dagre"
+import { configureTextBuilder } from "troika-three-text"
+// Labels are drawn in WebGL from a font file; a bundled one, since the app works offline.
+import labelFont from "@fontsource/ibm-plex-sans/files/ibm-plex-sans-latin-500-normal.woff?url"
 import { Expand, Loader2, Maximize, Network, Play, Search, Table2, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -21,17 +23,35 @@ import { flush, getState, useAppState } from "@/lib/store"
 import { useIsDark } from "@/lib/theme"
 import { cn } from "@/lib/utils"
 import { PageHead } from "@/views/ReviewView"
+import { Pager, usePaged } from "@/components/Pager"
 
-cytoscape.use(fcose)
-cytoscape.use(dagre)
+// The labels' text engine (troika) typesets in a blob: worker, which the app's CSP refuses, and
+// would fetch fallback fonts from a CDN; keep it on the main thread with the bundled font.
+configureTextBuilder({ useWorker: false, defaultFontURL: labelFont })
+
+// The label font's characters (fontsource's latin subset). For any other one troika would fetch a
+// fallback font from a CDN, which the CSP blocks, and then the whole scene draws nothing.
+const OUTSIDE_FONT = "[^\\u0020-\\u007E\\u00A0-\\u00FF\\u0131\\u0152\\u0153\\u02BB\\u02BC\\u02C6\\u02DA\\u02DC\\u2000-\\u206F\\u20AC\\u2122\\u2191\\u2193\\u2212\\u2215]"
+const outside = new RegExp(OUTSIDE_FONT, "g")
+const outsideAgain = new RegExp(OUTSIDE_FONT, "g")
+/** A label the bundled font can draw: accents it lacks lose their mark, arrows become "->", the rest goes. */
+const labelText = (s: string) =>
+  s
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(outside, (c) => (c === "→" ? "->" : c.normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(outsideAgain, "")))
 
 /*
   The knowledge graph as a map: "search, show context, expand on demand". It opens at topic level
-  (domains as groups); double-click a topic to see its concepts. Prerequisite mode lays the DAG out
-  left to right; Confusions mode keeps only the pairs you mix up. A table shows the same data.
+  (domains as clusters); double-click a topic to see its concepts, which cluster under it, and a
+  concept to close its topic again. Prerequisite mode lays the DAG out left to right; Confusions
+  mode keeps only the pairs you mix up. Drawn in WebGL (reagraph), so courses with thousands of
+  concepts stay fluid. A table shows the same data.
 */
 
 type Mode = "overview" | "prereq" | "confusions"
+
+const EXPAND_LIMIT = 800
 
 interface NodeInfo {
   id: string
@@ -58,15 +78,49 @@ function mix(a: string, b: string, t: number) {
   return `#${pa.map((x, i) => Math.round(x + (pb[i] - x) * t).toString(16).padStart(2, "0")).join("")}`
 }
 
-/** Deterministic PRNG, so the force layout lands the same way every time. */
-function seeded(seed: number) {
-  return () => {
-    seed |= 0
-    seed = (seed + 0x6d2b79f5) | 0
-    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed)
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+function graphTheme(): Theme {
+  const ink = css("--ink")
+  const ink2 = css("--ink-2")
+  const ink3 = css("--ink-3")
+  const line = css("--line")
+  const surface = css("--surface")
+  return {
+    canvas: { background: surface },
+    node: { fill: css("--surface-2"), activeFill: ink, opacity: 1, selectedOpacity: 1, inactiveOpacity: 0.15, label: { color: ink, stroke: surface, activeColor: ink } },
+    ring: { fill: ink3, activeFill: ink },
+    edge: { fill: line, activeFill: ink2, opacity: 0.9, selectedOpacity: 1, inactiveOpacity: 0.08, label: { color: ink2, stroke: surface, activeColor: ink, fontSize: 6 } },
+    arrow: { fill: ink2, activeFill: ink },
+    lasso: { background: "transparent", border: `1px solid ${ink3}` },
+    cluster: { stroke: line, fill: surface, opacity: 1, selectedOpacity: 1, inactiveOpacity: 0.3, label: { color: ink2, stroke: surface, fontSize: 11 } },
   }
+}
+
+/**
+  The prerequisite DAG, left to right (reagraph's own tree layouts need a single parent per node).
+  Nodes with no prerequisite either way would each take a row of their own, so they sit in a grid
+  under it.
+*/
+function dagLayout(ids: string[], edges: { src: string; dst: string }[]) {
+  const linked = new Set(edges.flatMap((e) => [e.src, e.dst]))
+  const g = new dagre.graphlib.Graph()
+  g.setGraph({ rankdir: "LR", nodesep: 14, ranksep: 90 })
+  g.setDefaultEdgeLabel(() => ({}))
+  for (const id of ids) if (linked.has(id)) g.setNode(id, { width: 30, height: 30 })
+  for (const e of edges) g.setEdge(e.src, e.dst)
+  dagre.layout(g)
+  const pos = new Map<string, { x: number; y: number; z: number }>()
+  let bottom = 0
+  // dagre's y grows downwards, the canvas' upwards.
+  for (const id of ids)
+    if (linked.has(id)) {
+      const n = g.node(id)
+      pos.set(id, { x: n.x, y: -n.y, z: 0 })
+      bottom = Math.max(bottom, n.y)
+    }
+  const rest = ids.filter((id) => !linked.has(id))
+  const cols = Math.ceil(Math.sqrt(rest.length * 2))
+  rest.forEach((id, i) => pos.set(id, { x: (i % cols) * 90, y: -(bottom + 90 + Math.floor(i / cols) * 45), z: 0 }))
+  return pos
 }
 
 export function ConceptMapView() {
@@ -176,6 +230,12 @@ export function ConceptMapView() {
 
   if (!data || !model) return <Loader2 className="size-5 animate-spin text-ink-3" />
   const sel = selected ? model.nodes.get(selected) ?? model.nodes.get(`t:${data.graph.kcs.find((k) => k.id === selected)?.topic}`) : null
+  // Every concept at once makes a WebGL scene of thousands of nodes (a few frames a second at ~2,300):
+  // "Expand all" opens the current domain, and only up to EXPAND_LIMIT concepts.
+  const inScope = data.topics.filter((t) => domain === "all" || String(t.d) === domain).map((t) => t.id)
+  const scopeSet = new Set(inScope)
+  const scopeConcepts = data.graph.kcs.filter((k) => k.topic && scopeSet.has(k.topic)).length
+  const tooMany = !expanded.size && scopeConcepts > EXPAND_LIMIT
 
   function locate(text: string) {
     const needle = text.trim().toLowerCase()
@@ -195,7 +255,7 @@ export function ConceptMapView() {
   return (
     <div>
       <PageHead eyebrow={LAB!.name} title="Concept map">
-        How your material fits together and where you stand in it. Colour shows mastery, size shows exam weight; solid arrows are prerequisites, orange dashes are concepts you mix up.
+        How your material fits together and where you stand in it. Colour shows mastery, size shows exam weight; solid arrows are prerequisites, orange lines are concepts you mix up.
         {model.topicLevel && " This lab has no concept graph yet, so topics are shown and their links come from shared questions and your misses. Build the knowledge base to see concepts and prerequisites."}
       </PageHead>
 
@@ -249,7 +309,13 @@ export function ConceptMapView() {
         )}
         <div className="ml-auto flex gap-1">
           {!model.topicLevel && (
-            <Button variant="ghost" size="sm" onClick={() => setExpanded(expanded.size ? new Set() : new Set(data.topics.map((t) => t.id)))}>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={tooMany}
+              title={tooMany ? `${scopeConcepts.toLocaleString()} concepts: pick a domain first, or double-click topics one by one` : undefined}
+              onClick={() => setExpanded(expanded.size ? new Set() : scopeSet)}
+            >
               <Expand /> {expanded.size ? "Collapse all" : "Expand all"}
             </Button>
           )}
@@ -279,6 +345,11 @@ export function ConceptMapView() {
   )
 }
 
+type GraphModel = { nodes: Map<string, NodeInfo>; edges: { src: string; dst: string; type: EdgeType; weight: number; n: number; evidence: string }[]; topicLevel: boolean }
+
+const edgeId = (e: { type: EdgeType; src: string; dst: string }) => `${e.type}:${e.src}:${e.dst}`
+const clamp01 = (x: number) => Math.max(0, Math.min(1, x))
+
 function Graph({
   model,
   data,
@@ -287,212 +358,138 @@ function Graph({
   onSelect,
   onToggle,
 }: {
-  model: { nodes: Map<string, NodeInfo>; edges: { src: string; dst: string; type: EdgeType; weight: number; n: number; evidence: string }[]; topicLevel: boolean }
+  model: GraphModel
   data: GraphViewData
   mode: Mode
   selected: string | null
   onSelect: (id: string | null) => void
   onToggle: (topic: string) => void
 }) {
-  const box = useRef<HTMLDivElement>(null)
-  const cyRef = useRef<Core | null>(null)
+  const ref = useRef<GraphCanvasRef>(null)
   const dark = useIsDark()
-  const handlers = useRef({ onSelect, onToggle })
-  handlers.current = { onSelect, onToggle }
+  const [hover, setHover] = useState<string | null>(null)
 
-  useEffect(() => {
-    if (!box.current) return
+  const { nodes, edges, theme, colors, layoutOverrides } = useMemo(() => {
     const seq0 = css("--seq-0")
     const seq1 = css("--seq-1")
+    const colors = { orange: css("--d2"), ink: css("--ink"), ink2: css("--ink-2"), line: css("--line") }
     const maxW = Math.max(0.0001, ...[...model.nodes.values()].map((n) => n.weight))
-    const els: ElementDefinition[] = []
-    const domains = new Set([...model.nodes.values()].map((n) => n.domain))
-    if (mode !== "prereq")
-      for (const d of domains) {
-        const dom = data.domains.find((x) => x.n === d)
-        els.push({ data: { id: `dom:${d}`, label: dom ? dom.short || dom.name : "Other" }, classes: "domain" })
-      }
-    const expandedTopics = new Set([...model.nodes.values()].filter((n) => n.kind === "kc" && n.topic).map((n) => n.topic!))
-    if (mode !== "prereq")
-      for (const t of expandedTopics) {
-        const topic = data.topics.find((x) => x.id === t)
-        els.push({ data: { id: `grp:${t}`, label: topic?.title ?? t, parent: `dom:${topic?.d ?? 0}` }, classes: "group" })
-      }
-    for (const n of model.nodes.values()) {
-      const size = 30 + 40 * Math.sqrt(n.weight / maxW)
-      els.push({
-        data: {
-          id: n.id,
-          label: n.label,
-          parent: mode === "prereq" ? undefined : n.kind === "kc" && n.topic && !model.topicLevel ? `grp:${n.topic}` : `dom:${n.domain}`,
-          color: n.mastery == null ? css("--surface-2") : mix(seq0, seq1, Math.max(0, Math.min(1, n.mastery))),
-          border: n.mastery == null ? css("--ink-3") : mix(seq0, seq1, 1),
-          size,
-          dashed: n.sd > 0.15 ? 1 : 0,
-        },
-        classes: `${n.kind}${n.misconceptions ? " misconception" : ""}`,
-      })
+    // reagraph labels nodes above size 7 at any zoom ("auto"); on a large graph only the heavy ones
+    // get there, the rest are labelled when zoomed in.
+    const minSize = model.nodes.size > 500 ? 3 : 7
+    const domainName = (d: number) => {
+      const dom = data.domains.find((x) => x.n === d)
+      return dom ? dom.short || dom.name : "Other"
     }
-    for (const e of model.edges) els.push({ data: { id: `${e.type}:${e.src}:${e.dst}`, source: e.src, target: e.dst, w: e.weight, n: e.n }, classes: e.type })
-
-    const ink = css("--ink")
-    const ink2 = css("--ink-2")
-    const ink3 = css("--ink-3")
-    const orange = css("--d2")
-    const line = css("--line")
-    const surface = css("--surface")
-    const cy = cytoscape({
-      container: box.current,
-      elements: els,
-      minZoom: 0.2,
-      maxZoom: 3,
-      wheelSensitivity: 0.3,
-      style: [
-        {
-          selector: "node",
-          style: {
-            label: "data(label)",
-            "font-size": 13,
-            "min-zoomed-font-size": 6,
-            color: ink,
-            "text-valign": "bottom",
-            "text-margin-y": 4,
-            "text-wrap": "wrap",
-            "text-max-width": "120px",
-            "text-outline-color": surface,
-            "text-outline-width": 2,
-            "border-width": 2,
-          },
-        },
-        {
-          selector: "node[size]",
-          style: { width: "data(size)", height: "data(size)", "background-color": "data(color)", "border-color": "data(border)" },
-        },
-        { selector: "node[dashed = 1]", style: { "border-style": "dashed" } },
-        { selector: "node.misconception", style: { "border-color": orange, "border-width": 3 } },
-        { selector: "node.topic", style: { shape: "round-rectangle" } },
-        {
-          selector: ":parent",
-          style: {
-            "background-opacity": 0.05,
-            "background-color": ink3,
-            "border-color": line,
-            "border-style": "dashed",
-            "border-width": 1,
-            label: "data(label)",
-            "text-valign": "top",
-            "text-halign": "center",
-            "font-size": 14,
-            "font-weight": "bold",
-            color: ink2,
-            padding: "14px",
-            shape: "round-rectangle",
-          },
-        },
-        {
-          selector: "edge",
-          style: { width: 1.5, "curve-style": "bezier", "line-color": line, opacity: 0.9 },
-        },
-        { selector: "edge.prerequisite", style: { "line-color": ink2, "target-arrow-color": ink2, "target-arrow-shape": "triangle", "arrow-scale": 0.9 } },
-        { selector: "edge.prerequisite[n]", style: { width: "mapData(n, 1, 6, 1.5, 4)" } },
-        { selector: "edge.confusable", style: { "line-color": orange, "line-style": "dashed" } },
-        { selector: "edge.confusable[w]", style: { width: "mapData(w, 1, 10, 1.5, 6)" } },
-        { selector: "edge.related", style: { "line-color": line, "line-style": "dotted", width: 1.2 } },
-        { selector: ".faded", style: { opacity: 0.15 } },
-        { selector: "node:selected", style: { "border-color": ink, "border-width": 4 } },
-      ],
-      layout: { name: "preset" },
+    const nodes: GraphNode[] = [...model.nodes.values()].map((n) => ({
+      id: n.id,
+      label: labelText(n.label),
+      size: minSize + 14 * Math.sqrt(n.weight / maxW),
+      // Spheres have no outline, so not-studied ones need a fill that shows on either theme.
+      fill: n.mastery == null ? css("--ink-3") : mix(seq0, seq1, clamp01(n.mastery)),
+      data: {
+        // Concepts of an open topic cluster under the topic, everything else under its domain.
+        group: labelText(n.kind === "kc" && n.topic && !model.topicLevel ? (data.topics.find((t) => t.id === n.topic)?.title ?? n.topic) : domainName(n.domain)),
+        // Not studied is already grey; faint marks a shaky estimate among the studied ones.
+        unsure: n.mastery != null && n.sd > 0.15,
+        misconception: n.misconceptions > 0,
+      },
+    }))
+    // Solid lines only: reagraph builds a tube per dash, which costs seconds on a large graph.
+    const edges = model.edges.map((e): GraphEdge => {
+      const base = { id: edgeId(e), source: e.src, target: e.dst }
+      if (e.type === "prerequisite") return { ...base, fill: colors.ink2, size: Math.min(4, 1 + e.n / 2) }
+      if (e.type === "confusable") return { ...base, fill: colors.orange, arrowPlacement: "none", size: Math.min(5, 1 + e.weight / 3) }
+      return { ...base, fill: colors.line, arrowPlacement: "none" }
     })
-    cyRef.current = cy
-
-    const restore = Math.random
-    Math.random = seeded(42)
-    try {
-      cy.layout(
-        mode === "prereq"
-          ? ({ name: "dagre", rankDir: "LR", nodeSep: 18, rankSep: 70, animate: false } as cytoscape.LayoutOptions)
-          : ({
-              name: "fcose",
-              quality: "proof",
-              randomize: true,
-              animate: false,
-              nodeRepulsion: 3500,
-              idealEdgeLength: 55,
-              nodeSeparation: 30,
-              nestingFactor: 0.35,
-              gravity: 0.6,
-              gravityCompound: 1.4,
-              tile: true,
-              tilingPaddingVertical: 12,
-              tilingPaddingHorizontal: 12,
-              packComponents: true,
-            } as cytoscape.LayoutOptions),
-      ).run()
-    } finally {
-      Math.random = restore
-    }
-    // Fit, but never below a readable zoom: "show context", then let the learner pan and expand.
-    cy.fit(undefined, 24)
-    if (cy.zoom() < 0.75) {
-      const c = cy.elements().boundingBox()
-      cy.zoom(0.75)
-      cy.center(cy.elements())
-      void c
-    }
-
-    const focus = (id: string | null) => {
-      cy.elements().removeClass("faded")
-      if (!id) return
-      const n = cy.getElementById(id)
-      if (!n.length || n.isParent()) return
-      const hood = mode === "prereq" ? n.predecessors().union(n) : n.closedNeighborhood()
-      cy.elements().not(hood).not(hood.ancestors()).addClass("faded")
-    }
-    cy.on("mouseover", "node", (e) => focus(e.target.id()))
-    cy.on("mouseout", "node", () => focus(cy.$("node:selected").id() || null))
-    cy.on("tap", "node", (e) => {
-      if (e.target.isParent()) return
-      handlers.current.onSelect(e.target.id())
-    })
-    cy.on("tap", (e) => {
-      if (e.target === cy) handlers.current.onSelect(null)
-    })
-    cy.on("dbltap", "node", (e) => {
-      const id: string = e.target.id()
-      if (id.startsWith("t:")) handlers.current.onToggle(id.slice(2))
-      else if (id.startsWith("grp:")) handlers.current.onToggle(id.slice(4))
-    })
-    return () => {
-      cy.destroy()
-      cyRef.current = null
-    }
+    const positions = mode === "prereq" ? dagLayout(nodes.map((n) => n.id), model.edges) : null
+    const layoutOverrides = positions ? { getNodePosition: (id: string) => positions.get(id) as InternalGraphPosition } : { linkDistance: 60, nodeStrength: -180 }
+    return { nodes, edges, theme: graphTheme(), colors, layoutOverrides }
+    // The colours come from the theme's CSS variables.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model, data, mode, dark])
 
-  // Selection follows the panel; centre on it.
+  // Hovering or selecting a node keeps its neighbourhood (in Prerequisites mode, everything it
+  // needs first) and fades the rest.
+  const focus = hover ?? selected
+  const { selections, actives } = useMemo(() => {
+    if (!focus || !model.nodes.has(focus)) return { selections: [], actives: [] }
+    const ids = new Set([focus])
+    const links: string[] = []
+    if (mode === "prereq") {
+      const stack = [focus]
+      while (stack.length) {
+        const x = stack.pop()!
+        for (const e of model.edges)
+          if (e.dst === x && !ids.has(e.src)) {
+            ids.add(e.src)
+            stack.push(e.src)
+          }
+      }
+      for (const e of model.edges) if (ids.has(e.src) && ids.has(e.dst)) links.push(edgeId(e))
+    } else
+      for (const e of model.edges)
+        if (e.src === focus || e.dst === focus) {
+          ids.add(e.src)
+          ids.add(e.dst)
+          links.push(edgeId(e))
+        }
+    // The selected node stays lit while another one is hovered.
+    if (selected && model.nodes.has(selected)) ids.add(selected)
+    return { selections: [...new Set([focus, selected ?? focus])], actives: [...ids, ...links] }
+  }, [focus, selected, model, mode])
+
+  // Selection follows the panel: once the layout has placed it, frame the node with its
+  // neighbourhood ("show context"), or centre it when it has none.
   useEffect(() => {
-    const cy = cyRef.current
-    if (!cy) return
-    cy.$("node:selected").unselect()
-    if (!selected) return
-    const n = cy.getElementById(selected)
-    if (n.length) {
-      n.select()
-      cy.animate({ center: { eles: n }, zoom: Math.max(cy.zoom(), 1) }, { duration: 250 })
-      const hood = mode === "prereq" ? n.predecessors().union(n) : n.closedNeighborhood()
-      cy.elements().removeClass("faded")
-      cy.elements().not(hood).not(hood.ancestors()).addClass("faded")
-    }
-  }, [selected, model, mode])
+    if (!selected || !model.nodes.has(selected)) return
+    const near = actives.filter((id) => model.nodes.has(id))
+    const t = setTimeout(() => (near.length > 1 ? ref.current?.fitNodesInView(near) : ref.current?.centerGraph([selected])), 300)
+    return () => clearTimeout(t)
+    // Hovering changes the highlighted set; only a new selection moves the camera.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected, model])
+
+  // Mastery stays the fill even while highlighted (reagraph would paint active nodes one colour);
+  // a faint node is an unsure estimate, an orange ring a misconception, an ink ring the selection.
+  const renderNode = ({ id, node, size, opacity, animated }: NodeRendererProps) => (
+    <>
+      <Sphere id={id} node={node} size={size} color={node.fill ?? colors.line} opacity={opacity * (node.data.unsure ? 0.5 : 1)} animated={animated} active={false} selected={false} />
+      {node.data.misconception && <Ring color={colors.orange} size={size} opacity={opacity} animated={animated} innerRadius={2.4} strokeWidth={4} />}
+      {id === selected && <Ring color={colors.ink} size={size} opacity={1} animated={animated} innerRadius={3.2} strokeWidth={6} />}
+    </>
+  )
 
   return (
-    <div className="relative">
-      <div
-        ref={box}
-        className="h-[62dvh] min-h-[420px] w-full"
-        role="img"
-        aria-label={`Concept map with ${model.nodes.size} nodes and ${model.edges.length} links. Use the table view for a keyboard-accessible list.`}
+    <div className="relative h-[62dvh] min-h-[420px] w-full" role="img" aria-label={`Concept map with ${model.nodes.size} nodes and ${model.edges.length} links. Use the table view for a keyboard-accessible list.`}>
+      <GraphCanvas
+        // reagraph frames the nodes only when it mounts: remount when the set of nodes changes.
+        key={`${mode}:${nodes.length}:${nodes[0]?.id}`}
+        ref={ref}
+        nodes={nodes}
+        edges={edges}
+        theme={theme}
+        labelFontUrl={labelFont}
+        // The discrete GPU on a machine with two.
+        glOptions={{ powerPreference: "high-performance" }}
+        layoutType={mode === "prereq" ? "custom" : "forceDirected2d"}
+        layoutOverrides={layoutOverrides}
+        clusterAttribute={mode === "prereq" ? undefined : "group"}
+        labelType={nodes.length > 150 ? "auto" : "all"}
+        selections={selections}
+        actives={actives}
+        renderNode={renderNode}
+        onNodeClick={(n) => onSelect(n.id)}
+        onNodeDoubleClick={(n) => {
+          if (n.id.startsWith("t:")) return onToggle(n.id.slice(2))
+          const topic = model.nodes.get(n.id)?.topic
+          if (topic && !model.topicLevel) onToggle(topic)
+        }}
+        onNodePointerOver={(n) => setHover(n.id)}
+        onNodePointerOut={() => setHover(null)}
+        onCanvasClick={() => onSelect(null)}
       />
-      <Button variant="outline" size="icon" className="absolute right-3 top-3 size-8" onClick={() => cyRef.current?.fit(undefined, 30)} aria-label="Fit to screen">
+      <Button variant="outline" size="icon" className="absolute right-3 top-3 size-8" onClick={() => ref.current?.fitNodesInView()} aria-label="Fit to screen">
         <Maximize className="size-4" />
       </Button>
     </div>
@@ -506,10 +503,13 @@ function GraphLegend() {
         <span className="h-2.5 w-10 rounded-sm" style={{ background: "linear-gradient(90deg, var(--seq-0), var(--seq-1))" }} /> mastery low → high
       </span>
       <span className="inline-flex items-center gap-1.5">
-        <span className="size-2.5 rounded-full border border-ink-3 bg-surface-2" /> not studied yet
+        <span className="size-2.5 rounded-full bg-ink-3" /> not studied yet
       </span>
       <span className="inline-flex items-center gap-1.5">
-        <span className="size-2.5 rounded-full border border-dashed border-ink-2" /> unsure estimate
+        <span className="size-2.5 rounded-full opacity-50" style={{ background: "var(--seq)" }} /> faint = unsure estimate
+      </span>
+      <span className="inline-flex items-center gap-1.5">
+        <span className="size-3 rounded-full border-2" style={{ borderColor: "var(--d2)" }} /> misconception
       </span>
       <span className="inline-flex items-center gap-1.5">
         <svg width="26" height="8" aria-hidden>
@@ -520,17 +520,17 @@ function GraphLegend() {
       </span>
       <span className="inline-flex items-center gap-1.5">
         <svg width="26" height="8" aria-hidden>
-          <line x1="0" y1="4" x2="26" y2="4" stroke="var(--d2)" strokeWidth="2" strokeDasharray="4 3" />
+          <line x1="0" y1="4" x2="26" y2="4" stroke="var(--d2)" strokeWidth="2" />
         </svg>
         often confused
       </span>
       <span className="inline-flex items-center gap-1.5">
         <svg width="26" height="8" aria-hidden>
-          <line x1="0" y1="4" x2="26" y2="4" stroke="var(--line)" strokeWidth="1.5" strokeDasharray="1 3" />
+          <line x1="0" y1="4" x2="26" y2="4" stroke="var(--line)" strokeWidth="1.5" />
         </svg>
         related (similar content, not causal)
       </span>
-      <span className="text-ink-3">Size = exam weight · double-click a topic to open its concepts</span>
+      <span className="text-ink-3">Size = exam weight · double-click a topic to open its concepts, a concept to close them</span>
     </div>
   )
 }
@@ -538,10 +538,11 @@ function GraphLegend() {
 function NodeTable({ model, onSelect }: { model: { nodes: Map<string, NodeInfo>; edges: { src: string; dst: string; type: EdgeType }[] }; onSelect: (id: string) => void }) {
   const [sort, setSort] = useState<"mastery" | "weight" | "label">("mastery")
   const rows = [...model.nodes.values()].sort((a, b) => (sort === "label" ? a.label.localeCompare(b.label) : sort === "weight" ? b.weight - a.weight : (a.mastery ?? -1) - (b.mastery ?? -1)))
+  const page = usePaged(rows, { reset: sort })
   const name = (id: string) => model.nodes.get(id)?.label ?? id
   return (
     <Card className="overflow-x-auto">
-      <CardContent>
+      <CardContent className="flex flex-col gap-3">
         <table className="w-full min-w-[640px] text-sm">
           <thead className="text-left text-xs text-ink-3">
             <tr>
@@ -563,7 +564,7 @@ function NodeTable({ model, onSelect }: { model: { nodes: Map<string, NodeInfo>;
             </tr>
           </thead>
           <tbody className="divide-y divide-line">
-            {rows.map((n) => (
+            {page.rows.map((n) => (
               <tr key={n.id}>
                 <td className="py-1.5 pr-2">
                   <button type="button" className="flex items-center gap-2 text-left hover:underline" onClick={() => onSelect(n.id)}>
@@ -590,6 +591,7 @@ function NodeTable({ model, onSelect }: { model: { nodes: Map<string, NodeInfo>;
             ))}
           </tbody>
         </table>
+        <Pager p={page} />
       </CardContent>
     </Card>
   )
@@ -615,7 +617,7 @@ function Panel({
       <Card>
         <CardContent className="flex flex-col gap-2 text-sm text-ink-2">
           <p className="font-medium text-ink">Select a node</p>
-          <p>Click a topic or concept to see its mastery, what it depends on and what you confuse it with. Double-click a topic to open its concepts.</p>
+          <p>Click a topic or concept to see its mastery, what it depends on and what you confuse it with. Double-click a topic to open its concepts, and one of them to close it again.</p>
         </CardContent>
       </Card>
     )

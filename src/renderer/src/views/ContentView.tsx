@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { JobStrip, startCoachJob } from "@/components/Jobs"
 import { DomainDot } from "@/components/Domain"
+import { Pager, usePaged } from "@/components/Pager"
 import { data, LAB, sourceName, useDataVersion } from "@/lib/data"
 import { api, reloadContent } from "@/lib/lab"
 import { useAppState } from "@/lib/store"
@@ -158,7 +159,8 @@ function ItemManager() {
       })
   }, [d, s.srsq, s.srsc, kind, topic, status, src, q])
 
-  const shown = rows.slice(0, 300)
+  const page = usePaged(rows, { reset: [kind, topic, status, src, q].join("|") })
+  const shown = page.rows
   const learned = rows.filter((r) => r.learned && r.status === "active")
   const srcOptions = kind === "q" ? [...new Set(d.allQuestions.map((x) => x.src))] : ["agent", "course"]
 
@@ -279,7 +281,7 @@ function ItemManager() {
           ))}
           {!shown.length && <li className="px-3 py-6 text-center text-sm text-ink-3">Nothing matches.</li>}
         </ul>
-        {rows.length > shown.length && <p className="text-xs text-ink-3">Showing the first 300. Narrow the filters to see the rest.</p>}
+        <Pager p={page} />
       </CardContent>
     </Card>
   )
