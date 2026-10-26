@@ -54,14 +54,14 @@ function JobRow({ job }: { job: JobInfo }) {
 /** Start a coach job and toast when it ends. Returns the job id, or null when it could not start. */
 export async function startCoachJob(labId: string, kind: Exclude<JobKind, "chat">, opts: Parameters<ReturnType<typeof api>["runJob"]>[2] = {}, done?: (j: JobInfo) => void) {
   const ai = await api().aiSettings()
-  if (!ai.hasKey) {
-    toast.error("Add your OpenRouter key first.", { action: { label: "Open settings", onClick: () => go("settings", { tab: "ai" }) } })
+  if (!ai.ready) {
+    toast.error(ai.provider === "claude-code" ? "Set up Claude Code and sign in with your Claude account first." : "Add your OpenRouter key first.", { action: { label: "Open settings", onClick: () => go("settings", { tab: "ai" }) } })
     return null
   }
   try {
     const id = await api().runJob(labId, kind, opts)
     void whenJobDone(id).then((j) => {
-      if (j.status === "done") toast.success(`${j.title}: done${j.usage ? ` ($${j.usage.cost.toFixed(4)})` : ""}`)
+      if (j.status === "done") toast.success(`${j.title}: done${j.usage?.cost ? ` ($${j.usage.cost.toFixed(4)})` : ""}`)
       else if (j.status === "error") toast.error(`${j.title} failed: ${j.error}`)
       done?.(j)
     })

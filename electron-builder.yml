@@ -6,7 +6,14 @@ directories:
 files:
   - out/**
   - package.json
+  # onnxruntime-node (the local embedding model) ships binaries for every platform; keep this one's.
+  - "!node_modules/onnxruntime-node/bin/napi-v*/linux/**"
+  - "!node_modules/onnxruntime-node/bin/napi-v*/darwin/**"
+  - "!node_modules/onnxruntime-node/bin/napi-v*/win32/arm64/**"
 asar: true
+# Native code cannot load from inside the asar.
+asarUnpack:
+  - node_modules/onnxruntime-node/bin/**
 extraResources:
   - from: resources/skills
     to: skills

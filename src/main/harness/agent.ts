@@ -5,49 +5,18 @@ import type { ChatToolCall } from "@shared/types"
 import { emit, type JobHandle } from "../jobs"
 import { currentModel, friendlyAiError, listModels } from "../openrouter"
 import { runTool, TOOLS, type Tool, type ToolContext, type Touched } from "../tools"
+import { provider } from "../llm"
+import { runClaudeAgent } from "./claude"
 import { listConnections, loadConnectionTools } from "./connections"
 import { makeModel } from "./model"
 import { builtinSkillsDir, userSkillsDir } from "./skills"
+import { stepLabel, summarize } from "./steps"
 
 /*
-  The coach's harness: a DeepAgents agent (planning, a scratch filesystem, sub-agents, skills
+  The coach's harness on OpenRouter (harness/claude.ts runs the same jobs on Claude Code): a DeepAgents agent (planning, a scratch filesystem, sub-agents, skills
   loaded on demand) wired to the lab's own tools, to the learner's external MCP servers, and to
   OpenRouter. Every lab tool still goes through the journaled registry, so all writes are undoable.
 */
-
-const STEP_LABEL: Record<string, string> = {
-  get_overview: "Reading your analytics",
-  list_topics: "Reviewing topics",
-  get_topic_report: "Studying a topic",
-  get_graph: "Reading the knowledge graph",
-  list_mistakes: "Looking at your mistakes",
-  get_question: "Reading a question",
-  search_content: "Searching the course",
-  read_lecture: "Reading a lecture",
-  list_items: "Checking items",
-  get_plan: "Checking the plan",
-  compute_plan: "Computing the schedule",
-  get_lab: "Reading the lab setup",
-  create_flashcards: "Writing flashcards",
-  create_questions: "Writing questions",
-  write_study_guide: "Writing a study guide",
-  save_study_plan: "Saving the plan",
-  save_insight_report: "Saving the report",
-  set_focus: "Pinning focus topics",
-  create_collection: "Building a practice set",
-  upsert_topic: "Organising topics",
-  tag_questions: "Tagging questions",
-  set_item_status: "Managing material",
-  remember: "Saving a note",
-  read_file: "Reading a skill",
-  task: "Delegating to a sub-agent",
-  write_todos: "Planning the work",
-}
-
-export function stepLabel(name: string, servers: string[] = []) {
-  const server = servers.find((s) => name.startsWith(`${s}_`))
-  return STEP_LABEL[name] ?? (server ? `Using ${server}` : name.replace(/_/g, " "))
-}
 
 function toLangChain(ctx: ToolContext, tools: Tool[]): StructuredTool[] {
   return tools.map((t) =>
@@ -88,6 +57,9 @@ export interface RunOptions {
   subagents?: boolean
   maxSteps?: number
   onToolCall?: (calls: ChatToolCall[]) => void
+  /** Claude Code only: the session to continue, and whether to keep this run's transcript */
+  resume?: string
+  persist?: boolean
 }
 
 export interface RunResult {
@@ -95,9 +67,12 @@ export interface RunResult {
   /** the messages this run added (for chat history) */
   added: BaseMessage[]
   calls: ChatToolCall[]
+  /** Claude Code only: the session that now holds the conversation */
+  session?: string
 }
 
 export async function runLabAgent(o: RunOptions): Promise<RunResult> {
+  if (provider() === "claude-code") return runClaudeAgent(o)
   await ensureHarnessModel()
   const touched = new Set<Touched>()
   const ctx: ToolContext = { labId: o.labId, actor: currentModel(), notify: (w) => w.forEach((x) => touched.add(x)) }
@@ -206,20 +181,6 @@ export function messageText(m: BaseMessage): string {
   return (c as { type?: string; text?: string }[])
     .map((p) => (p.type === "text" ? (p.text ?? "") : ""))
     .join("")
-}
-
-function summarize(text: string): string {
-  if (text.startsWith("ERROR:")) return text.slice(6, 206).trim()
-  try {
-    const r = JSON.parse(text) as Record<string, unknown> | unknown[]
-    if (Array.isArray(r)) return `${r.length} rows`
-    if (typeof r.created === "number") return `created ${r.created}`
-    if (typeof r.updated === "number") return `updated ${r.updated}`
-    if (typeof r.tagged === "number") return `tagged ${r.tagged}`
-  } catch {
-    /* not JSON */
-  }
-  return ""
 }
 
 /* ---------- chat history in the database ---------- */

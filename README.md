@@ -6,9 +6,12 @@ Cada **lab** é um espaço de estudo independente: uma certificação, um curso,
 
 ## Destaques
 
-- **Setup guiado**: gateway de IA, depois o lab, depois o conteúdo, depois a base de conhecimento.
-  - Login no OpenRouter por **OAuth PKCE** (sem copiar chave) ou colando uma chave.
-  - Catálogo de modelos marcado como *pronto*, *limitado* ou *incompatível* com o harness. O padrão é `deepseek/deepseek-v4.1-flash-1017`.
+- **Setup guiado**: IA, depois o lab, depois o conteúdo, depois a base de conhecimento.
+  - **Sua conta Claude** (Pro ou Max): o app instala o próprio Claude Code e roda o coach com `claude -p` em segundo plano, gastando o limite do seu plano, sem cobrança por token.
+    - Versão fixada (`src/main/claude/pinned.ts`, gerada do manifesto da release com a assinatura gpg conferida), aceita só com o SHA-256 fixado e a assinatura Authenticode da Anthropic.
+    - Pasta própria (`CLAUDE_CONFIG_DIR` dentro dos dados do app), ambiente limpo e nenhuma configuração, hook, MCP ou ferramenta do Claude Code da máquina.
+    - Login pelo `claude auth login`: o app abre só a página da Anthropic e repassa o código colado. Ele nunca lê a credencial.
+  - Ou **OpenRouter**, por **OAuth PKCE** (sem copiar chave) ou colando uma chave. O catálogo de modelos vem marcado como *pronto*, *limitado* ou *incompatível* com o harness. O padrão é `deepseek/deepseek-v4.1-flash-1017`.
   - Templates neutros: certificação, curso, idioma, matéria e em branco.
 - **Formato padrão de conteúdo** ([Content Package v1](docs/content-package.md)) com importadores modulares:
   - Udemy Study Export (Markdown);
@@ -19,7 +22,7 @@ Cada **lab** é um espaço de estudo independente: uma certificação, um curso,
   Para uma fonte nova (Coursera…), basta gerar o JSON ou escrever um adapter.
 - **Grafo de conhecimento** ([metodologia](docs/methodology.md)):
   - trechos com evidência;
-  - knowledge components (KCs) extraídos e deduplicados por embeddings;
+  - knowledge components (KCs) extraídos e deduplicados por embeddings, por padrão de um **modelo local** (EmbeddingGemma 300M q8, multilíngue, CPU, ~309 MB baixados uma vez do Hugging Face com revisão e SHA-256 fixados);
   - tópicos e domínios;
   - pré-requisitos por ensemble (ordem no curso + reference distance + LLM, sem ciclos);
   - pares confundíveis vindos dos distratores;
@@ -42,13 +45,13 @@ Cada **lab** é um espaço de estudo independente: uma certificação, um curso,
   - **Performance**: nota prevista como quantile dotplot; mapa de domínio com incerteza e "fantasma" de 14 dias atrás; retenção até a prova; calibração; velocidade × acerto.
   - **Timeline**: trilhas alinhadas de atividade, nota prevista com simulados, marcos e adesão ao plano; calendário; evolução por domínio.
   - **Concept map** (Cytoscape): tópicos que se expandem em conceitos; modos pré-requisitos e confusões; busca; painel de detalhes; visão em tabela.
-- **Coach no DeepAgents** (LangChain):
+- **Coach** no Claude Code (com a sua conta) ou no DeepAgents (LangChain, com o OpenRouter). Os dois têm:
   - planejamento, sistema de arquivos de rascunho e subagentes (learning-analyst, content-author);
   - **skills** em SKILL.md: 7 nativas, mais as suas;
   - **conexões MCP externas** (HTTP ou comando local) por lab;
   - ferramentas do lab com diário de alterações e **desfazer**.
 - **Servidor MCP local** (opcional): as mesmas ferramentas ficam disponíveis para Claude Desktop, Claude Code, Cursor e outros, com um endpoint por lab.
-- **Tudo local**: SQLite (`node:sqlite`, sem módulos nativos). A chave fica criptografada com `safeStorage`.
+- **Tudo local**: SQLite (`node:sqlite`). O único módulo nativo é o `onnxruntime-node`, do modelo de embedding. A chave do OpenRouter fica criptografada com `safeStorage`.
 
 ## Rodar
 
@@ -63,10 +66,17 @@ npm run dev
 | `npm run dev` | Electron + Vite com HMR |
 | `npm run build` / `npm start` | Gera `out/` e roda o build |
 | `npm run typecheck` | Tipos do main e do renderer |
-| `npm test` | 34 testes: parser e adapters, OAuth, ingestão, FSRS, modelo do aluno, planner, construtor do grafo e agente contra um OpenRouter simulado, skills, MCP |
+| `npm test` | 56 testes: parser e adapters, OAuth, ingestão, FSRS, modelo do aluno, planner, construtor do grafo, agente contra um OpenRouter simulado e contra um Claude Code falso, instalação fixada, skills, MCP, embedding local |
+| `npm run pin-claude-code -- <versão>` | Fixa outra versão do Claude Code (precisa de `gpg`) |
 | `npm run dist` | Instalador Windows (NSIS) |
 
-O banco fica em `%APPDATA%/Study Lab/study-lab.db`. Para usar outro arquivo, defina `STUDY_LAB_DB`.
+O banco fica em `%APPDATA%/Study Lab/study-lab.db`. Para usar outro arquivo, defina `STUDY_LAB_DB`. O Claude Code do app fica em `%APPDATA%/Study Lab/claude` e o modelo de embedding em `%APPDATA%/Study Lab/models`.
+
+Para rodar o teste do modelo de embedding real, aponte `STUDY_LAB_TEST_MODELS` para uma pasta `models` que já tenha o modelo baixado.
+
+## Coach no Claude Code
+
+Cada execução (chat, análise, plano, geração, cada etapa do grafo) é um `claude -p` com `--setting-sources ""`, `--strict-mcp-config` e só a ferramenta `Agent`. As ferramentas do lab chegam por um endpoint MCP privado daquela execução: porta efêmera em `127.0.0.1`, token próprio só no ambiente, apenas as ferramentas daquela tarefa. Por isso toda escrita continua no diário e pode ser desfeita. As conexões MCP externas do lab entram no mesmo `mcp.json`. As skills são lidas por uma ferramenta `read_skill`, e o learning-analyst e o content-author viram agentes do Claude Code. O chat retoma a sessão do Claude Code (`--resume`) enquanto ela tiver todas as mensagens da conversa; se não tiver, o histórico vai escrito no prompt. O construtor do grafo usa `--json-schema`, sem ferramentas.
 
 ## Arquitetura
 
@@ -79,7 +89,10 @@ src/main/      Electron main
   buildkb.ts embeddings.ts pipeline do grafo de conhecimento
   learner.ts viz.ts       modelo do aluno, plano e dados das visualizações
   tools.ts journal.ts     ferramentas do lab (agente + MCP) e desfazer
-  harness/                DeepAgents: modelo OpenRouter, skills, conexões MCP, execução
+  harness/                execução do coach: DeepAgents (OpenRouter) e Claude Code, skills, conexões MCP
+  claude/                 Claude Code do app: instalação fixada, ambiente, login, stream-json, execuções
+  llm.ts                  provedor ativo (Claude Code ou OpenRouter) e JSON para o construtor do grafo
+  localEmbed.ts           modelo de embedding local (download conferido, ONNX no CPU)
   agent.ts                tarefas do coach (análise, plano, geração, chat)
   oauth.ts mcp.ts         login OpenRouter (PKCE) e servidor MCP
 src/renderer/  React 19 + Tailwind 4 + shadcn/ui

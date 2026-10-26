@@ -1,125 +1,375 @@
 import { useEffect, useMemo, useState } from "react"
-import { Check, Copy, KeyRound, Loader2, RefreshCw, Search, Server, Wrench } from "lucide-react"
+import { Bot, Check, Copy, Cpu, Download, ExternalLink, KeyRound, Loader2, LogOut, RefreshCw, Search, Server, Wrench, X } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Progress } from "@/components/ui/progress"
 import { Switch } from "@/components/ui/switch"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { DEFAULT_MODEL, LANGUAGES } from "@shared/defaults"
 import { api } from "@/lib/lab"
 import { LAB } from "@/lib/data"
-import type { AiSettings, ModelInfo } from "@/lib/types"
+import type { AiProvider, AiSettings, EmbeddingSource, ModelInfo } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 const price = (usdPerM: number) => (usdPerM === 0 ? "free" : usdPerM < 0.1 ? `$${usdPerM.toFixed(3)}` : `$${usdPerM.toFixed(2)}`)
+const mb = (bytes: number) => `${Math.round(bytes / 1e6)} MB`
+export const ipcError = (e: unknown) => (e as Error).message.replace(/^Error invoking remote method 'api': (Error: )?/, "")
 
+/** The AI settings, kept current by the main process (installs, sign-in and downloads report as they go). */
 export function useAiSettings() {
   const [ai, setAi] = useState<AiSettings | null>(null)
   useEffect(() => {
     void api().aiSettings().then(setAi)
+    return window.studyLab.onEvent((e) => {
+      if (e.type === "ai") setAi(e.ai)
+    })
   }, [])
   return [ai, setAi] as const
 }
 
+type Setter = (a: AiSettings) => void
+
 export function AiSettingsPanel({ compact }: { compact?: boolean }) {
   const [ai, setAi] = useAiSettings()
-  const [key, setKey] = useState("")
-  const [testing, setTesting] = useState(false)
   const [usage, setUsage] = useState<{ today: number; month: number; total: number; calls: number } | null>(null)
 
   useEffect(() => {
     void api().usage().then(setUsage)
-  }, [ai?.model])
+  }, [ai?.model, ai?.provider])
 
   if (!ai) return <Loader2 className="size-4 animate-spin text-ink-3" />
-
-  async function saveKey() {
-    const next = await api().setAiKey(key.trim() || null)
-    setAi(next)
-    setKey("")
-    toast.success(next.hasKey ? "Key saved, encrypted with your system keychain." : "Key removed.")
-  }
-
-  async function test() {
-    setTesting(true)
-    const r = await api().testAi()
-    setTesting(false)
-    if (r.ok) toast.success(r.message)
-    else toast.error(r.message)
-  }
 
   return (
     <div className={cn("grid gap-6", !compact && "lg:grid-cols-2")}>
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <KeyRound className="size-4" /> OpenRouter
+            <Bot className="size-4" /> AI coach
           </CardTitle>
-          <CardDescription>
-            The coach runs on any model available on{" "}
-            <button type="button" className="underline underline-offset-2" onClick={() => void api().openExternal("https://openrouter.ai/keys")}>
-              openrouter.ai
-            </button>
-            . Your key stays on this computer, encrypted with the system keychain.
-          </CardDescription>
+          <CardDescription>Run the coach and the knowledge-base builder on your own Claude plan, or on any OpenRouter model with an API key.</CardDescription>
         </CardHeader>
-        <CardContent className="flex flex-col gap-4">
-          <ConnectButton onConnected={setAi} connected={ai.hasKey} />
-          <div className="space-y-1.5">
-            <Label htmlFor="or-key">{ai.hasKey ? "API key" : "Or paste an API key"}</Label>
-            <div className="flex gap-2">
-              <Input
-                id="or-key"
-                type="password"
-                value={key}
-                onChange={(e) => setKey(e.target.value)}
-                placeholder={ai.hasKey ? `Saved: ${ai.keyHint}` : "sk-or-v1-…"}
-                autoComplete="off"
-                className="font-mono"
-              />
-              <Button onClick={saveKey} disabled={!key.trim()}>
-                Save
-              </Button>
+        <CardContent className="flex flex-col gap-5">
+          <ProviderPicker ai={ai} setAi={setAi} />
+          {ai.provider === "claude-code" ? <ClaudeSetup ai={ai} setAi={setAi} /> : <OpenRouterSetup ai={ai} setAi={setAi} />}
+          <LanguagePicker ai={ai} setAi={setAi} />
+          <div className="flex flex-wrap items-center gap-3">
+            <TestButton disabled={!ai.ready} />
+            {usage && ai.provider === "openrouter" && (
+              <p className="font-mono text-xs text-ink-3 tabular">
+                Spent: ${usage.today.toFixed(3)} today · ${usage.month.toFixed(2)} this month · ${usage.total.toFixed(2)} total · {usage.calls} calls
+              </p>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+      <div className="flex flex-col gap-6">
+        <EmbeddingsCard ai={ai} setAi={setAi} />
+        <McpCard ai={ai} onChange={setAi} />
+      </div>
+    </div>
+  )
+}
+
+export function ProviderPicker({ ai, setAi }: { ai: AiSettings; setAi: Setter }) {
+  return (
+    <ToggleGroup type="single" variant="outline" value={ai.provider} onValueChange={async (v) => v && setAi(await api().updateAiSettings({ provider: v as AiProvider }))} className="w-full">
+      <ToggleGroupItem value="claude-code" className="flex-1">
+        Claude plan
+      </ToggleGroupItem>
+      <ToggleGroupItem value="openrouter" className="flex-1">
+        OpenRouter key
+      </ToggleGroupItem>
+    </ToggleGroup>
+  )
+}
+
+function Step({ n, done, title, children }: { n: number; done: boolean; title: string; children: React.ReactNode }) {
+  return (
+    <div className="flex gap-3">
+      <span className={cn("mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full text-[0.7rem] font-semibold", done ? "bg-good-bg text-good" : "bg-surface-2 text-ink-2")}>
+        {done ? <Check className="size-3" /> : n}
+      </span>
+      <div className="flex min-w-0 flex-1 flex-col gap-2">
+        <p className="text-sm font-medium">{title}</p>
+        {children}
+      </div>
+    </div>
+  )
+}
+
+const CLAUDE_MODELS = [
+  { id: "sonnet", label: "Sonnet", hint: "The best balance for coaching and building (default)." },
+  { id: "opus", label: "Opus", hint: "The most capable; uses up your plan's limit fastest." },
+  { id: "haiku", label: "Haiku", hint: "The fastest and the lightest on your limit." },
+]
+
+/** Claude Code inside the app: the pinned install, then the learner's Claude account. */
+export function ClaudeSetup({ ai, setAi }: { ai: AiSettings; setAi: Setter }) {
+  const c = ai.claude
+  const installed = c.binary === "ok"
+  const call = async (fn: () => Promise<AiSettings | void>) => {
+    try {
+      const next = await fn()
+      if (next) setAi(next)
+    } catch (e) {
+      toast.error(ipcError(e))
+    }
+  }
+  return (
+    <div className="flex flex-col gap-4 rounded-md border border-line p-4">
+      <p className="text-xs text-ink-3">
+        Study Lab runs its own copy of Claude Code in the background with your Claude Pro or Max account. Coach runs count against your plan's usage limit, with nothing billed per token. The
+        sign-in stays inside Study Lab's Claude Code; the app never reads it.
+      </p>
+      <Step n={1} done={installed} title={`Claude Code ${c.version}`}>
+        {installed && <p className="text-xs text-ink-3">Installed and verified: the pinned release, signed by Anthropic.</p>}
+        {c.binary === "unsupported" && <p className="text-xs text-bad">There is no Claude Code build for this computer.</p>}
+        {c.binary === "installing" && (
+          <div className="flex items-center gap-3">
+            <Progress value={(c.progress ?? 0) * 100} className="flex-1" />
+            <span className="font-mono text-xs tabular text-ink-3">{Math.round((c.progress ?? 0) * 100)}%</span>
+          </div>
+        )}
+        {(c.binary === "missing" || c.binary === "changed" || c.binary === "failed") && (
+          <>
+            {c.binary === "changed" && <p className="text-xs text-warn">The installed copy had been changed, so it was deleted. Install it again.</p>}
+            {c.binary === "failed" && c.error && <p className="text-xs text-bad">{c.error}</p>}
+            <Button size="sm" className="w-fit" onClick={() => void call(() => api().claudeInstall())}>
+              <Download /> Install Claude Code (about 300 MB)
+            </Button>
+          </>
+        )}
+      </Step>
+      <Step n={2} done={c.account.loggedIn} title="Your Claude account">
+        {!installed ? (
+          <p className="text-xs text-ink-3">After the install.</p>
+        ) : c.account.loggedIn ? (
+          <div className="flex flex-wrap items-center gap-2 text-xs text-ink-2">
+            <span>
+              Signed in{c.account.email ? ` as ${c.account.email}` : ""}
+              {c.account.plan ? ` · ${c.account.plan} plan` : ""}
+            </span>
+            <Button variant="ghost" size="sm" onClick={() => void call(() => api().claudeLogout())}>
+              <LogOut /> Sign out
+            </Button>
+          </div>
+        ) : c.login ? (
+          <ClaudeLogin url={c.login.url} />
+        ) : (
+          <>
+            {c.error && <p className="text-xs text-bad">{c.error}</p>}
+            <Button size="sm" className="w-fit" onClick={() => void call(() => api().claudeLogin())}>
+              <KeyRound /> Sign in with Claude
+            </Button>
+          </>
+        )}
+      </Step>
+      <div className="space-y-1.5">
+        <Label>Model</Label>
+        <Select value={c.model} onValueChange={async (claudeModel) => setAi(await api().updateAiSettings({ claudeModel }))}>
+          <SelectTrigger className="w-60">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {CLAUDE_MODELS.map((m) => (
+              <SelectItem key={m.id} value={m.id}>
+                {m.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <p className="text-xs text-ink-3">{CLAUDE_MODELS.find((m) => m.id === c.model)?.hint}</p>
+      </div>
+    </div>
+  )
+}
+
+/** Claude Code opens the sign-in page itself; the button reopens it, and a code the page shows is pasted here. */
+function ClaudeLogin({ url }: { url: string | null }) {
+  const [code, setCode] = useState("")
+  async function send(e: React.FormEvent) {
+    e.preventDefault()
+    try {
+      await api().claudeLoginCode(code)
+      setCode("")
+    } catch (err) {
+      toast.error(ipcError(err))
+    }
+  }
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        {url ? (
+          <Button size="sm" variant="outline" onClick={() => void api().claudeLoginOpen()}>
+            <ExternalLink /> Open the sign-in page
+          </Button>
+        ) : (
+          <span className="flex items-center gap-2 text-xs text-ink-3">
+            <Loader2 className="size-3.5 animate-spin" /> Starting the sign-in…
+          </span>
+        )}
+        <Button size="sm" variant="ghost" onClick={() => void api().claudeLoginCancel()}>
+          <X /> Cancel
+        </Button>
+      </div>
+      <form onSubmit={send} className="space-y-1.5">
+        <Label htmlFor="claude-code" className="text-xs text-ink-3">
+          Sign in on the page in your browser. If it shows a code, paste it here
+        </Label>
+        <div className="flex gap-2">
+          <Input id="claude-code" value={code} onChange={(e) => setCode(e.target.value)} autoComplete="off" className="font-mono" placeholder="Paste the code" />
+          <Button type="submit" disabled={!code.trim()}>
+            Send
+          </Button>
+        </div>
+      </form>
+    </div>
+  )
+}
+
+export function OpenRouterSetup({ ai, setAi }: { ai: AiSettings; setAi: Setter }) {
+  const [key, setKey] = useState("")
+  async function saveKey() {
+    const next = await api().setAiKey(key.trim() || null)
+    setAi(next)
+    setKey("")
+    toast.success(next.hasKey ? "Key saved, encrypted with your system keychain." : "Key removed.")
+  }
+  return (
+    <div className="flex flex-col gap-4 rounded-md border border-line p-4">
+      <p className="text-xs text-ink-3">
+        Any model on{" "}
+        <button type="button" className="underline underline-offset-2" onClick={() => void api().openExternal("https://openrouter.ai/keys")}>
+          openrouter.ai
+        </button>
+        , paid per token. Your key stays on this computer, encrypted with the system keychain.
+      </p>
+      <ConnectButton onConnected={setAi} connected={ai.hasKey} />
+      <div className="space-y-1.5">
+        <Label htmlFor="or-key">{ai.hasKey ? "API key" : "Or paste an API key"}</Label>
+        <div className="flex gap-2">
+          <Input id="or-key" type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder={ai.hasKey ? `Saved: ${ai.keyHint}` : "sk-or-v1-…"} autoComplete="off" className="font-mono" />
+          <Button onClick={saveKey} disabled={!key.trim()}>
+            Save
+          </Button>
+        </div>
+        {ai.hasKey && (
+          <Button variant="ghost" size="sm" className="w-fit" onClick={async () => setAi(await api().setAiKey(null))}>
+            Remove key
+          </Button>
+        )}
+      </div>
+      <ModelPicker value={ai.model} onChange={async (model) => setAi(await api().updateAiSettings({ model }))} />
+    </div>
+  )
+}
+
+export function LanguagePicker({ ai, setAi }: { ai: AiSettings; setAi: Setter }) {
+  return (
+    <div className="space-y-1.5">
+      <Label>Coach language</Label>
+      <Select value={ai.language} onValueChange={async (language) => setAi(await api().updateAiSettings({ language }))}>
+        <SelectTrigger className="w-60">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {LANGUAGES.map((l) => (
+            <SelectItem key={l} value={l}>
+              {l}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <p className="text-xs text-ink-3">The coach talks to you in this language. New study material follows the language of each lab's content.</p>
+    </div>
+  )
+}
+
+export function TestButton({ disabled }: { disabled?: boolean }) {
+  const [testing, setTesting] = useState(false)
+  return (
+    <Button
+      variant="outline"
+      size="sm"
+      disabled={disabled || testing}
+      onClick={async () => {
+        setTesting(true)
+        const r = await api().testAi()
+        setTesting(false)
+        if (r.ok) toast.success(r.message)
+        else toast.error(r.message)
+      }}
+    >
+      {testing ? <Loader2 className="animate-spin" /> : <Check />} Test connection
+    </Button>
+  )
+}
+
+/** Embeddings for the knowledge graph: the local model by default, OpenRouter's endpoint with a key. */
+function EmbeddingsCard({ ai, setAi }: { ai: AiSettings; setAi: Setter }) {
+  const m = ai.embeddings.local
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Cpu className="size-4" /> Embeddings
+        </CardTitle>
+        <CardDescription>
+          How the knowledge-base builder measures similarity between concepts, lectures, questions and cards. The local model runs on this computer's CPU, works offline and costs nothing.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        <ToggleGroup type="single" variant="outline" value={ai.embeddings.source} onValueChange={async (v) => v && setAi(await api().updateAiSettings({ embeddings: v as EmbeddingSource }))} className="w-full">
+          <ToggleGroupItem value="local" className="flex-1">
+            Local model
+          </ToggleGroupItem>
+          <ToggleGroupItem value="openrouter" className="flex-1">
+            OpenRouter
+          </ToggleGroupItem>
+        </ToggleGroup>
+        {ai.embeddings.source === "local" ? (
+          <div className="flex flex-col gap-2 rounded-md border border-line p-3">
+            <div className="flex items-center gap-2">
+              <span className="min-w-0 flex-1 text-sm">
+                {m.name} <span className="text-xs text-ink-3">· multilingual · {mb(m.size)}</span>
+              </span>
+              <span className={cn("text-xs", m.state === "ready" ? "text-good" : m.state === "failed" ? "text-bad" : "text-ink-3")}>
+                {m.state === "ready" ? "● ready" : m.state === "downloading" ? "downloading" : m.state === "failed" ? "failed" : "not downloaded"}
+              </span>
             </div>
-            {ai.hasKey && (
-              <div className="flex gap-2 pt-1">
-                <Button variant="outline" size="sm" onClick={test} disabled={testing}>
-                  {testing ? <Loader2 className="animate-spin" /> : <Check />} Test connection
-                </Button>
-                <Button variant="ghost" size="sm" onClick={async () => setAi(await api().setAiKey(null))}>
-                  Remove key
+            {m.state === "downloading" && (
+              <div className="flex items-center gap-3">
+                <Progress value={(m.progress ?? 0) * 100} className="flex-1" />
+                <span className="font-mono text-xs tabular text-ink-3">{Math.round((m.progress ?? 0) * 100)}%</span>
+                <Button variant="ghost" size="icon" className="size-7" onClick={() => void api().localModelCancel()} aria-label="Cancel">
+                  <X className="size-4" />
                 </Button>
               </div>
             )}
+            {m.error && m.state === "failed" && <p className="text-xs text-bad">{m.error}</p>}
+            {(m.state === "missing" || m.state === "failed") && (
+              <>
+                <p className="text-xs text-ink-3">Downloaded once from Hugging Face and checked against a pinned hash. The builder also downloads it the first time it needs it.</p>
+                <Button size="sm" variant="outline" className="w-fit" onClick={async () => setAi(await api().localModelDownload())}>
+                  <Download /> Download now
+                </Button>
+              </>
+            )}
+            {m.state === "ready" && (
+              <Button size="sm" variant="ghost" className="w-fit" onClick={async () => setAi(await api().localModelRemove())}>
+                Remove the model
+              </Button>
+            )}
           </div>
-          <ModelPicker value={ai.model} onChange={async (model) => setAi(await api().updateAiSettings({ model }))} />
-          <div className="space-y-1.5">
-            <Label>Coach language</Label>
-            <Select value={ai.language} onValueChange={async (language) => setAi(await api().updateAiSettings({ language }))}>
-              <SelectTrigger className="w-60">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {LANGUAGES.map((l) => (
-                  <SelectItem key={l} value={l}>
-                    {l}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <p className="text-xs text-ink-3">The coach talks to you in this language. New study material follows the language of each lab's content.</p>
-          </div>
-          {usage && (
-            <p className="font-mono text-xs text-ink-3 tabular">
-              Spent: ${usage.today.toFixed(3)} today · ${usage.month.toFixed(2)} this month · ${usage.total.toFixed(2)} total · {usage.calls} calls
-            </p>
-          )}
-        </CardContent>
-      </Card>
-      <McpCard ai={ai} onChange={setAi} />
-    </div>
+        ) : (
+          <p className="text-xs text-ink-3">{ai.hasKey ? "baai/bge-m3 through your OpenRouter key, billed per token." : "Needs an OpenRouter key; without one the builder falls back to lexical similarity."}</p>
+        )}
+      </CardContent>
+    </Card>
   )
 }
 
@@ -133,7 +383,7 @@ export function ConnectButton({ onConnected, connected }: { onConnected: (a: AiS
       onConnected(a)
       toast.success("Connected to OpenRouter")
     } catch (e) {
-      toast.error((e as Error).message.replace(/^Error invoking remote method 'api': (Error: )?/, ""))
+      toast.error(ipcError(e))
     } finally {
       setWaiting(false)
     }

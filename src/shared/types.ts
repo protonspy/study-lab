@@ -385,11 +385,44 @@ export interface ModelInfo {
   notes: string[]
 }
 
+export type AiProvider = "claude-code" | "openrouter"
+export type EmbeddingSource = "local" | "openrouter"
+
+/** The app's Claude Code: the pinned binary, the learner's Claude account and a sign-in in progress. */
+export interface ClaudeStatus {
+  version: string
+  binary: "ok" | "missing" | "changed" | "installing" | "failed" | "unsupported"
+  /** 0–1 while installing */
+  progress?: number
+  error?: string
+  account: { loggedIn: boolean; method: string; plan?: string; email?: string }
+  /** the address to open and what Claude Code wrote, while signing in */
+  login: { url: string | null; text: string } | null
+  /** opus, sonnet or haiku */
+  model: string
+  ready: boolean
+}
+
+export interface LocalModelStatus {
+  name: string
+  /** bytes to download */
+  size: number
+  state: "missing" | "downloading" | "ready" | "failed"
+  progress?: number
+  error?: string
+}
+
 export interface AiSettings {
+  provider: AiProvider
+  /** whether the active provider can run the coach */
+  ready: boolean
   hasKey: boolean
   keyHint: string
+  /** the OpenRouter model */
   model: string
   language: string
+  claude: ClaudeStatus
+  embeddings: { source: EmbeddingSource; local: LocalModelStatus }
   mcp: { enabled: boolean; port: number; token: string; running: boolean; error?: string }
 }
 

@@ -513,7 +513,7 @@ function ChatTab() {
     const body = t.trim()
     if (!body || busy) return
     const ai = await api().aiSettings()
-    if (!ai.hasKey) return toast.error("Add your OpenRouter key in Settings → AI coach first.")
+    if (!ai.ready) return toast.error(ai.provider === "claude-code" ? "Set up Claude Code and sign in with your Claude account in Settings → AI coach first." : "Add your OpenRouter key in Settings → AI coach first.")
     await flush()
     setText("")
     const r = await api().sendChat(lab.id, cur, body)

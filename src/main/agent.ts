@@ -5,7 +5,7 @@ import { HumanMessage, ToolMessage, type BaseMessage } from "@langchain/core/mes
 import { getSetting } from "./db"
 import { fromStored, runLabAgent, toStored } from "./harness/agent"
 import { emit, type JobHandle } from "./jobs"
-import { currentModel } from "./openrouter"
+import { activeModel } from "./llm"
 import * as repo from "./repo"
 import { TOOLS, type Tool } from "./tools"
 
@@ -159,7 +159,7 @@ export async function runAnalyze(labId: string, job: JobHandle) {
   })
   if (!saved) {
     // Some models answer in prose instead of calling the tool; keep that answer as a report.
-    repo.saveInsight(labId, { id: repo.newId("ins_"), at: Date.now(), model: currentModel(), headline: "Analysis", summary: res.text, strengths: [], insights: [], misconceptions: [], next: [] })
+    repo.saveInsight(labId, { id: repo.newId("ins_"), at: Date.now(), model: activeModel(), headline: "Analysis", summary: res.text, strengths: [], insights: [], misconceptions: [], next: [] })
     emit({ type: "lab-changed", labId, what: ["insights"] })
   }
 }
@@ -219,6 +219,9 @@ export async function runChat(labId: string, threadId: string, text: string, job
   const at = Date.now()
   const user = new HumanMessage(text)
   const history = trimHistory(fromStored(repo.rawMessages(threadId)))
+  // A Claude Code session resumes only when it holds every message so far (no turn ran elsewhere since).
+  const session = repo.threadSession(threadId)
+  const resume = session && session.upto === repo.lastMessageId(threadId) ? session.id : undefined
   const userMsg = repo.addMessage(threadId, { role: "user", content: text, at }, toStored([user]))
   emit({ type: "chat", labId, threadId, message: userMsg })
   let calls: ChatToolCall[] = []
@@ -230,12 +233,15 @@ export async function runChat(labId: string, threadId: string, text: string, job
       maxSteps: 20,
       system: systemPrompt(labId),
       messages: [...history, user],
+      resume,
+      persist: true,
       onToolCall: (c) => {
         calls = c
         emit({ type: "chat", labId, threadId, message: { id: -1, role: "assistant", content: "", tools: c, at: Date.now() } })
       },
     })
     const msg = repo.addMessage(threadId, { role: "assistant", content: res.text || "(no answer)", tools: res.calls, at: Date.now() }, toStored(res.added))
+    repo.setThreadSession(threadId, res.session ? { id: res.session, upto: msg.id } : null)
     emit({ type: "chat", labId, threadId, message: msg })
   } catch (e) {
     const msg = repo.addMessage(threadId, { role: "assistant", content: `⚠️ ${(e as Error).message}`, tools: calls, at: Date.now() })

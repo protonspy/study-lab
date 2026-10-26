@@ -8,7 +8,7 @@ import { cosine, getEmbedder, toBlob } from "./embeddings"
 import * as graph from "./graph"
 import { emit, type JobHandle } from "./jobs"
 import { Change } from "./journal"
-import { chatJson, currentModel } from "./openrouter"
+import { activeModel, askJson, ensureAiReady } from "./llm"
 import * as repo from "./repo"
 
 /*
@@ -100,13 +100,14 @@ export async function runBuildKb(labId: string, job: JobHandle, o: BuildKbOption
   const content = repo.readContent(labId)
   const cfg = repo.getConfig(labId)
   if (!lab.counts.lectures && !content.questions.length) throw new Error("Import lectures or questions first — there is nothing to build from.")
+  await ensureAiReady()
   const sys = systemPrompt(labId)
   const ch = new Change(labId, "knowledge-builder", "build_kb")
   const keep = (o.keep ?? true) && graph.hasKcs(labId)
   const cardsPerTopic = Math.max(0, Math.min(25, o.cardsPerTopic ?? 10))
   const usage = (u: { tokensIn: number; tokensOut: number; cost: number }, m: string) => job.addUsage(u, m)
   const ask = async <T>(task: string, schema: Record<string, unknown>, user: string, maxTokens = 8000) => {
-    const r = await chatJson<T>({ task: `build-kb:${task}`, labId, signal: job.signal, maxTokens, schema: { name: task, schema }, messages: [{ role: "system", content: sys }, { role: "user", content: user }] })
+    const r = await askJson<T>({ task: `build-kb:${task}`, labId, signal: job.signal, maxTokens, schema: { name: task, schema }, messages: [{ role: "system", content: sys }, { role: "user", content: user }] })
     usage(r.usage, r.model)
     return r.data
   }
@@ -117,7 +118,7 @@ export async function runBuildKb(labId: string, job: JobHandle, o: BuildKbOption
   if (keep) for (const k of all<{ evidence: string }>("SELECT evidence FROM kcs WHERE lab_id = ?", labId)) for (const e of JSON.parse(k.evidence) as string[]) covered.add(Number(e.split(":")[0]))
   const lectureNs = new Set(repo.getLectures(labId).filter((l) => !covered.has(l.n)).map((l) => l.n))
   const chunks = chunkLectures(labId, lectureNs)
-  const embedder = await getEmbedder(labId, job.signal)
+  const embedder = await getEmbedder(labId, job.signal, (t) => job.step(t, 0.03))
   job.step(`Embedding ${chunks.length} chunks (${embedder.kind === "model" ? embedder.model : "local lexical vectors"})…`, 0.05)
   const chunkVec = new Map<string, Float32Array>()
   const vecs = await embedder.embed(
@@ -154,7 +155,7 @@ export async function runBuildKb(labId: string, job: JobHandle, o: BuildKbOption
   if (cur.length) groups.push(cur)
   const candidates: Candidate[] = []
   let doneGroups = 0
-  const model = currentModel()
+  const model = activeModel()
   await pool(groups, 3, async (g) => {
     if (job.signal.aborted) return
     type Extracted = { concepts: { name: string; definition: string; kind: string; chunks: string[]; relies_on: string[] }[] }

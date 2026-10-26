@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { closeDb, openDb } from "../src/main/db"
+import { closeDb, openDb, setSetting } from "../src/main/db"
 import { saveKey } from "../src/main/openrouter"
 import { backoffMs, getEmbedder } from "../src/main/embeddings"
 
@@ -17,6 +17,9 @@ let calls = 0
 before(async () => {
   openDb(join(dir, "embed.db"))
   await saveKey("sk-or-test")
+  // These run against OpenRouter's endpoint; the local model has its own tests.
+  setSetting("ai.embeddings", "openrouter")
+  setSetting("ai.provider", "openrouter")
   globalThis.fetch = (async (_url: string, init?: RequestInit) => {
     calls++
     const status = statuses.shift() ?? 200

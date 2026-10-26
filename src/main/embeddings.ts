@@ -1,17 +1,24 @@
+import type { EmbeddingSource } from "@shared/types"
 import { getSetting } from "./db"
+import { downloadLocalModel, embedLocal, LOCAL_MODEL, localModelStatus } from "./localEmbed"
 import { readKey } from "./openrouter"
 import { logAiCall } from "./repo"
 
 /*
   Text embeddings for the knowledge graph (similarity, deduplication, candidate search).
-  OpenRouter's /embeddings endpoint when a key is set; otherwise, or if it fails, a local lexical
-  vector (hashed TF with log weighting) so building still works offline, with stricter thresholds.
+  By default the local model (localEmbed.ts), downloaded on first use; or OpenRouter's /embeddings
+  endpoint with a key. When neither works, a lexical vector (hashed TF with log weighting) so
+  building still works offline, with stricter thresholds.
 */
 
 export const DEFAULT_EMBEDDING_MODEL = "baai/bge-m3"
 const DIM_LEXICAL = 1024
 
 export type EmbeddingKind = "model" | "lexical"
+
+export function embeddingSource(): EmbeddingSource {
+  return getSetting<EmbeddingSource>("ai.embeddings", "local")
+}
 
 export interface Embedder {
   kind: EmbeddingKind
@@ -154,8 +161,36 @@ function modelEmbedder(model: string, key: string, labId: string | null): Embedd
   }
 }
 
-/** The model embedder when it works (probed once), the lexical one otherwise. */
-export async function getEmbedder(labId: string | null, signal?: AbortSignal): Promise<Embedder> {
+/*
+  Calibrated on paraphrases (0.84–0.91, across Portuguese and English too), related concepts
+  (0.58–0.72) and unrelated ones (0.32–0.46): EmbeddingGemma's scale sits lower than bge-m3's.
+*/
+const local: Embedder = {
+  kind: "model",
+  model: `${LOCAL_MODEL.name} (local)`,
+  thresholds: { high: 0.88, low: 0.76, related: 0.62, duplicate: 0.9 },
+  embed: (texts, signal) => embedLocal(texts, signal),
+}
+
+/**
+  The embedder for a build: the local model (downloading it first if needed, `onStep` tells the
+  progress), or OpenRouter's when chosen and it answers a probe; the lexical one when neither works.
+*/
+export async function getEmbedder(labId: string | null, signal?: AbortSignal, onStep?: (text: string) => void): Promise<Embedder> {
+  if (embeddingSource() === "local") {
+    try {
+      if (localModelStatus().state !== "ready") {
+        const mb = Math.round(localModelStatus().size / 1e6)
+        onStep?.(`Downloading the local embedding model (${mb} MB, once)…`)
+        await downloadLocalModel(signal, (p) => onStep?.(`Downloading the local embedding model (${Math.round(p * 100)}% of ${mb} MB, once)…`))
+      }
+      await local.embed(["probe"], signal)
+      return local
+    } catch {
+      if (signal?.aborted) throw new Error("Cancelled.")
+      return lexical
+    }
+  }
   const key = readKey()
   if (!key) return lexical
   const e = modelEmbedder(embeddingModel(), key, labId)

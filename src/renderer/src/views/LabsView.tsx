@@ -75,7 +75,7 @@ export function LabsView() {
         </div>
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" onClick={() => setAiOpen(true)}>
-            <Bot /> AI coach {ai && !ai.hasKey && <span className="size-2 rounded-full bg-warn" />}
+            <Bot /> AI coach {ai && !ai.ready && <span className="size-2 rounded-full bg-warn" />}
           </Button>
           <Button variant="outline" onClick={importFile}>
             <FileUp /> Import lab
@@ -144,7 +144,7 @@ export function LabsView() {
         <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>AI coach</DialogTitle>
-            <DialogDescription>One OpenRouter key and model for every lab.</DialogDescription>
+            <DialogDescription>One AI setup (your Claude plan or an OpenRouter key) for every lab.</DialogDescription>
           </DialogHeader>
           <AiSettingsPanel compact />
         </DialogContent>

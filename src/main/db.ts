@@ -274,6 +274,10 @@ const MIGRATIONS: string[] = [
     PRIMARY KEY (lab_id, key)
   );
   `,
+  // v5: the Claude Code session behind a chat thread, so the next message resumes it
+  `
+  ALTER TABLE threads ADD COLUMN claude_session TEXT;
+  `,
 ]
 
 let db: DatabaseSync | null = null

@@ -611,6 +611,20 @@ export function listMessages(threadId: string): ChatMessage[] {
   ).map((r) => ({ id: r.id, at: r.at, role: r.role, content: r.content, tools: json(r.tools, undefined) }))
 }
 
+/** The Claude Code session that holds this thread up to message `upto`, if any. */
+export function threadSession(threadId: string): { id: string; upto: number } | null {
+  const r = one<{ claude_session: string | null }>("SELECT claude_session FROM threads WHERE id = ?", threadId)
+  return json<{ id: string; upto: number } | null>(r?.claude_session ?? null, null)
+}
+
+export function setThreadSession(threadId: string, s: { id: string; upto: number } | null) {
+  run("UPDATE threads SET claude_session = ? WHERE id = ?", s ? JSON.stringify(s) : null, threadId)
+}
+
+export function lastMessageId(threadId: string): number {
+  return one<{ id: number | null }>("SELECT MAX(id) AS id FROM messages WHERE thread_id = ?", threadId)?.id ?? 0
+}
+
 /** The raw provider messages (with tool calls and results) for continuing a conversation. */
 export function rawMessages(threadId: string): unknown[] {
   return all<{ raw: string | null }>("SELECT raw FROM messages WHERE thread_id = ? ORDER BY id", threadId).flatMap((r) => json<unknown[]>(r.raw, []))

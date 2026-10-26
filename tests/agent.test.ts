@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { closeDb, openDb } from "../src/main/db"
+import { closeDb, openDb, setSetting } from "../src/main/db"
 import * as repo from "../src/main/repo"
 import { importUdemy } from "../src/main/importers"
 import { saveKey } from "../src/main/openrouter"
@@ -35,6 +35,9 @@ before(async () => {
   process.env.STUDY_LAB_USER_SKILLS = join(dir, "skills")
   openDb(join(dir, "agent.db"))
   await saveKey("sk-or-test")
+  // These run against OpenRouter's endpoint; the local model has its own tests.
+  setSetting("ai.embeddings", "openrouter")
+  setSetting("ai.provider", "openrouter")
   labId = repo.createLab({ name: "Cloud", preset: "certification" }).id
   await importUdemy(labId, [join(fixtures, "sample-simulados.md"), join(fixtures, "sample-transcricoes.md")])
   globalThis.fetch = scripted = (async (url: string, init?: RequestInit) => {

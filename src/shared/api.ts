@@ -2,11 +2,13 @@ import type { LearnerSnapshot } from "./analytics"
 import type { PackageSummary } from "./content-package"
 import type { LabPreset } from "./defaults"
 import type {
+  AiProvider,
   AiSettings,
   AppState,
   ChangeEntry,
   ChatMessage,
   ChatThread,
+  EmbeddingSource,
   ImportResult,
   InsightReport,
   ItemStatus,
@@ -144,7 +146,27 @@ export interface Api {
   /** OAuth PKCE: opens the browser, waits for consent, stores the new key */
   connectOpenRouter(): Promise<AiSettings>
   cancelConnect(): Promise<void>
-  updateAiSettings(patch: { model?: string; language?: string; mcp?: { enabled?: boolean; port?: number; rotateToken?: boolean } }): Promise<AiSettings>
+  updateAiSettings(patch: {
+    provider?: AiProvider
+    model?: string
+    claudeModel?: string
+    embeddings?: EmbeddingSource
+    language?: string
+    mcp?: { enabled?: boolean; port?: number; rotateToken?: boolean }
+  }): Promise<AiSettings>
+  /* Claude Code: install the pinned binary, sign in with the learner's Claude account */
+  claudeInstall(): Promise<AiSettings>
+  claudeLogin(): Promise<AiSettings>
+  /** the code Anthropic's page shows, pasted back */
+  claudeLoginCode(code: string): Promise<void>
+  /** open the sign-in page Claude Code printed (only an Anthropic address) */
+  claudeLoginOpen(): Promise<void>
+  claudeLoginCancel(): Promise<void>
+  claudeLogout(): Promise<AiSettings>
+  /* the local embedding model */
+  localModelDownload(): Promise<AiSettings>
+  localModelCancel(): Promise<void>
+  localModelRemove(): Promise<AiSettings>
   listModels(force?: boolean): Promise<ModelInfo[]>
   /* coach harness: skills and external MCP servers */
   skills(): Promise<SkillInfo[]>
@@ -214,6 +236,15 @@ export const API_METHODS = [
   "connectOpenRouter",
   "cancelConnect",
   "updateAiSettings",
+  "claudeInstall",
+  "claudeLogin",
+  "claudeLoginCode",
+  "claudeLoginOpen",
+  "claudeLoginCancel",
+  "claudeLogout",
+  "localModelDownload",
+  "localModelCancel",
+  "localModelRemove",
   "listModels",
   "skills",
   "saveSkill",
@@ -252,6 +283,7 @@ export type MainEvent =
   | { type: "job"; job: JobInfo }
   | { type: "chat"; labId: string; threadId: string; message: ChatMessage }
   | { type: "lab-changed"; labId: string; what: ("content" | "config" | "plans" | "insights" | "state")[] }
+  | { type: "ai"; ai: AiSettings }
 
 export interface Bridge {
   api: Api

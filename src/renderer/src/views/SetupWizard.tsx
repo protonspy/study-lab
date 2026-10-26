@@ -5,11 +5,10 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { ConnectButton, ModelPicker, useAiSettings } from "@/components/AiSettingsPanel"
+import { ClaudeSetup, LanguagePicker, OpenRouterSetup, ProviderPicker, TestButton, useAiSettings } from "@/components/AiSettingsPanel"
 import { ImportPanel } from "@/components/ImportPanel"
 import { JobStrip, startCoachJob } from "@/components/Jobs"
-import { LANGUAGES, type LabPreset } from "@shared/defaults"
+import type { LabPreset } from "@shared/defaults"
 import { LAB, useDataVersion } from "@/lib/data"
 import { api, finishSetup, openLab, reloadContent, useJobs } from "@/lib/lab"
 import { updateSettings } from "@/lib/actions"
@@ -17,7 +16,7 @@ import type { ExamConfig, LabKind } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 /*
-  First run and "New lab": 1. connect the AI gateway (skipped when it is already set up),
+  First run and "New lab": 1. connect the AI (Claude plan or OpenRouter) (skipped when it is already set up),
   2. describe the lab, 3. import material, 4. let the coach build the knowledge base.
 */
 
@@ -37,11 +36,11 @@ export function SetupWizard({ firstRun }: { firstRun: boolean }) {
   const [labId, setLabId] = useState<string | null>(null)
 
   useEffect(() => {
-    if (ai && !step) setStep(ai.hasKey ? "lab" : "ai")
+    if (ai && !step) setStep(ai.ready ? "lab" : "ai")
   }, [ai, step])
 
   if (!ai || !step) return <Loader2 className="m-10 size-5 animate-spin text-ink-3" />
-  const visible = STEPS.filter((s) => s.id !== "ai" || !ai.hasKey || step === "ai")
+  const visible = STEPS.filter((s) => s.id !== "ai" || !ai.ready || step === "ai")
   const idx = visible.findIndex((s) => s.id === step)
 
   return (
@@ -77,7 +76,7 @@ export function SetupWizard({ firstRun }: { firstRun: boolean }) {
         {step === "ai" && <AiStep ai={ai} setAi={setAi} onNext={() => setStep("lab")} />}
         {step === "lab" && (
           <LabStep
-            onBack={!ai.hasKey ? undefined : visible.some((s) => s.id === "ai") ? () => setStep("ai") : undefined}
+            onBack={!ai.ready ? undefined : visible.some((s) => s.id === "ai") ? () => setStep("ai") : undefined}
             onCreated={(id) => {
               setLabId(id)
               setStep("content")
@@ -94,8 +93,6 @@ export function SetupWizard({ firstRun }: { firstRun: boolean }) {
 /* ---------- 1. AI gateway ---------- */
 
 function AiStep({ ai, setAi, onNext }: { ai: NonNullable<ReturnType<typeof useAiSettings>[0]>; setAi: (a: typeof ai) => void; onNext: () => void }) {
-  const [key, setKey] = useState("")
-  const [testing, setTesting] = useState(false)
   return (
     <section className="flex flex-col gap-6">
       <div>
@@ -103,66 +100,18 @@ function AiStep({ ai, setAi, onNext }: { ai: NonNullable<ReturnType<typeof useAi
           <Bot className="size-5" /> Connect the AI coach
         </h2>
         <p className="mt-1 text-ink-2">
-          The coach runs on <span className="font-medium text-ink">OpenRouter</span>, one account for hundreds of models. Sign in once; the key is stored encrypted on this computer.
+          Use your <span className="font-medium text-ink">Claude plan</span> (Pro or Max) through Claude Code, which Study Lab installs and runs for you, or an{" "}
+          <span className="font-medium text-ink">OpenRouter</span> key for hundreds of pay-per-token models.
         </p>
       </div>
-      <div className="flex flex-col gap-3 rounded-lg border border-line bg-surface p-5">
-        {ai.hasKey ? (
-          <p className="flex items-center gap-2 text-sm">
-            <Check className="size-4 text-good" /> Connected · key {ai.keyHint}
-          </p>
-        ) : (
-          <ConnectButton onConnected={setAi} />
-        )}
-        {!ai.hasKey && (
-          <div className="space-y-1.5">
-            <Label htmlFor="wiz-key" className="text-xs text-ink-3">
-              Or paste a key from openrouter.ai/keys
-            </Label>
-            <div className="flex gap-2">
-              <Input id="wiz-key" type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="sk-or-v1-…" className="font-mono" autoComplete="off" />
-              <Button variant="outline" disabled={!key.trim()} onClick={async () => setAi(await api().setAiKey(key.trim()))}>
-                Save
-              </Button>
-            </div>
-          </div>
-        )}
-      </div>
       <div className="flex flex-col gap-4 rounded-lg border border-line bg-surface p-5">
-        <ModelPicker value={ai.model} onChange={async (model) => setAi(await api().updateAiSettings({ model }))} />
-        <div className="space-y-1.5">
-          <Label>Coach language</Label>
-          <Select value={ai.language} onValueChange={async (language) => setAi(await api().updateAiSettings({ language }))}>
-            <SelectTrigger className="w-60">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {LANGUAGES.map((l) => (
-                <SelectItem key={l} value={l}>
-                  {l}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
+        <ProviderPicker ai={ai} setAi={setAi} />
+        {ai.provider === "claude-code" ? <ClaudeSetup ai={ai} setAi={setAi} /> : <OpenRouterSetup ai={ai} setAi={setAi} />}
+        <LanguagePicker ai={ai} setAi={setAi} />
       </div>
       <div className="flex justify-end gap-2">
-        {ai.hasKey && (
-          <Button
-            variant="outline"
-            disabled={testing}
-            onClick={async () => {
-              setTesting(true)
-              const r = await api().testAi()
-              setTesting(false)
-              if (r.ok) toast.success(r.message)
-              else toast.error(r.message)
-            }}
-          >
-            {testing ? <Loader2 className="animate-spin" /> : <Check />} Test
-          </Button>
-        )}
-        <Button onClick={onNext} disabled={!ai.hasKey}>
+        {ai.ready && <TestButton />}
+        <Button onClick={onNext} disabled={!ai.ready}>
           Continue <ArrowRight />
         </Button>
       </div>

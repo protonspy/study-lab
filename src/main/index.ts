@@ -15,6 +15,24 @@ import { cancelOAuth, connectOpenRouter } from "./oauth"
 import { deleteConnection, listConnections, saveConnection, testConnection } from "./harness/connections"
 import { deleteSkill, listSkills, saveSkill } from "./harness/skills"
 import { chat, currentModel, initKey, keyHint, listModels, readKey, saveKey } from "./openrouter"
+import {
+  cancelClaudeLogin,
+  CLAUDE_MODELS,
+  claudeLoginUrl,
+  claudeStatus,
+  installClaude,
+  logoutClaude,
+  onClaudeChange,
+  refreshClaude,
+  runClaude,
+  sendClaudeCode,
+  startClaudeLogin,
+  stopAllClaude,
+} from "./claude/service"
+import { isAnthropicUrl } from "./claude/account"
+import { embeddingSource } from "./embeddings"
+import { activeModel, initProvider, provider } from "./llm"
+import { cancelLocalModelDownload, downloadLocalModel, localModelStatus, onLocalModelChange, removeLocalModel } from "./localEmbed"
 import * as repo from "./repo"
 import * as viz from "./viz"
 import { labLearner, labPlan, plannerPlan } from "./learner"
@@ -24,14 +42,22 @@ let dbPath = ""
 
 function aiSettings(): AiSettings {
   const mcp = mcpConfig()
+  const claude = claudeStatus()
+  const p = provider()
   return {
+    provider: p,
+    ready: p === "claude-code" ? claude.ready : !!readKey(),
     hasKey: !!readKey(),
     keyHint: keyHint(),
     model: currentModel(),
     language: getSetting("ai.language", LANGUAGES[0]),
+    claude,
+    embeddings: { source: embeddingSource(), local: localModelStatus() },
     mcp: { ...mcp, ...mcpStatus() },
   }
 }
+
+const pushAi = () => emit({ type: "ai", ai: aiSettings() })
 
 const api: Api = {
   /* labs */
@@ -99,7 +125,10 @@ const api: Api = {
   snapshot: async (labId) => repo.snapshot(labId),
 
   /* AI settings */
-  aiSettings: async () => aiSettings(),
+  aiSettings: async () => {
+    await refreshClaude()
+    return aiSettings()
+  },
   setAiKey: async (key) => {
     await saveKey(key)
     return aiSettings()
@@ -110,12 +139,46 @@ const api: Api = {
   },
   cancelConnect: async () => cancelOAuth(),
   updateAiSettings: async (patch) => {
+    if (patch.provider === "claude-code" || patch.provider === "openrouter") setSetting("ai.provider", patch.provider)
     if (patch.model) setSetting("ai.model", patch.model.trim())
+    if (patch.claudeModel && (CLAUDE_MODELS as readonly string[]).includes(patch.claudeModel)) setSetting("claude.model", patch.claudeModel)
+    if (patch.embeddings === "local" || patch.embeddings === "openrouter") setSetting("ai.embeddings", patch.embeddings)
     if (patch.language) setSetting("ai.language", patch.language)
     if (patch.mcp) {
       saveMcpConfig(patch.mcp)
       await applyMcp()
     }
+    return aiSettings()
+  },
+  claudeInstall: async () => {
+    await installClaude()
+    return aiSettings()
+  },
+  claudeLogin: async () => {
+    startClaudeLogin()
+    return aiSettings()
+  },
+  claudeLoginCode: async (code) => {
+    if (typeof code !== "string") throw new Error("That code does not look right.")
+    sendClaudeCode(code)
+  },
+  // Opens only the address Claude Code itself printed, and only an Anthropic one.
+  claudeLoginOpen: async () => {
+    const url = claudeLoginUrl()
+    if (url && isAnthropicUrl(url)) await shell.openExternal(url)
+  },
+  claudeLoginCancel: async () => cancelClaudeLogin(),
+  claudeLogout: async () => {
+    await logoutClaude()
+    return aiSettings()
+  },
+  localModelDownload: async () => {
+    void downloadLocalModel().catch(() => undefined)
+    return aiSettings()
+  },
+  localModelCancel: async () => cancelLocalModelDownload(),
+  localModelRemove: async () => {
+    await removeLocalModel()
     return aiSettings()
   },
   listModels: async (force) => listModels(force),
@@ -128,6 +191,10 @@ const api: Api = {
   testMcpConnection: async (id) => testConnection(id),
   testAi: async () => {
     try {
+      if (provider() === "claude-code") {
+        const r = await runClaude({ system: "You answer with one word.", prompt: "Reply with the single word: ready" })
+        return { ok: true, message: `${activeModel()} answered “${r.text.trim().slice(0, 40)}” on your Claude plan.` }
+      }
       const r = await chat({ messages: [{ role: "user", content: "Reply with the single word: ready" }], task: "test", maxTokens: 20 })
       return { ok: true, message: `${r.model} answered “${(r.message.content ?? "").trim().slice(0, 40)}”.` }
     } catch (e) {
@@ -254,12 +321,19 @@ else {
     dbPath = process.env.STUDY_LAB_DB ?? join(app.getPath("userData"), "study-lab.db")
     openDb(dbPath)
     await initKey()
+    initProvider()
     registerIpc()
+    onClaudeChange(pushAi)
+    onLocalModelChange(pushAi)
     await applyMcp().catch(() => undefined)
     createWindow()
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow()
     })
+  })
+  app.on("before-quit", () => {
+    stopAllClaude()
+    cancelClaudeLogin()
   })
   app.on("window-all-closed", () => {
     if (process.platform !== "darwin") app.quit()
