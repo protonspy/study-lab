@@ -4,13 +4,14 @@ import { dirname, join } from "node:path"
 import { Readable, Transform } from "node:stream"
 import { pipeline } from "node:stream/promises"
 import { app } from "electron"
-import type { LocalModelStatus } from "@shared/types"
+import type { EmbeddingDevice, LocalModelStatus } from "@shared/types"
 
 /*
   The local embedding model: EmbeddingGemma 300M (8-bit ONNX), multilingual and the strongest open
   embedder under 500M parameters on MMTEB. Downloaded once from Hugging Face at a pinned revision,
-  each file accepted only with its pinned SHA-256, then run on the CPU with onnxruntime-node. The
-  ONNX graph already pools and normalises, so its `sentence_embedding` output is the vector.
+  each file accepted only with its pinned SHA-256, then run with onnxruntime-node on the CPU or,
+  when the learner picks it, on a GPU through DirectML (Windows). The ONNX graph already pools and
+  normalises, so its `sentence_embedding` output is the vector.
 */
 
 export const LOCAL_MODEL = {
@@ -53,7 +54,47 @@ export function localModelStatus(): LocalModelStatus {
     state: downloading ? "downloading" : isInstalled() ? "ready" : lastError ? "failed" : "missing",
     progress: downloading?.progress,
     error: downloading ? undefined : lastError,
+    device: device.kind,
+    gpu: device.gpu,
+    gpus,
+    gpuError,
+    speed,
   }
+}
+
+/* ---------- device ---------- */
+
+// The software rasteriser (WARP): DirectML refuses it, and Windows always lists it last.
+const isSoftware = (g: { vendorId: number; deviceId: number }) => g.vendorId === 0x1414 && g.deviceId === 0x8c
+const DIRECTML = process.platform === "win32" && (process.arch === "x64" || process.arch === "arm64")
+
+let device: { kind: EmbeddingDevice; gpu: number } = { kind: "cpu", gpu: 0 }
+let gpus: LocalModelStatus["gpus"] = []
+let gpuError: string | undefined
+let speed: LocalModelStatus["speed"]
+
+/**
+  The GPUs DirectML can use. Chromium lists the adapters in DXGI order, which is DirectML's device
+  id, so a GPU's position here is the id to ask for. Returns the index of the high-performance one.
+*/
+export async function detectGpus(): Promise<number> {
+  if (!DIRECTML) return 0
+  const info = (await app.getGPUInfo("basic")) as { gpuDevice?: { vendorId: number; deviceId: number; deviceString?: string; gpuPreference?: number }[] }
+  // gpuPreference 3 is Chromium's "high performance": the discrete GPU on a laptop with two.
+  gpus = (info.gpuDevice ?? []).filter((g) => !isSoftware(g)).map((g, i) => ({ name: g.deviceString || `GPU ${i + 1}`, highPerformance: g.gpuPreference === 3 }))
+  return Math.max(0, gpus.findIndex((g) => g.highPerformance))
+}
+
+/**
+  Where the model runs from now on; the same choice again retries a GPU that failed. A session
+  already open is released once its calls end.
+*/
+export function setLocalDevice(kind: EmbeddingDevice, gpu: number) {
+  const next = { kind: DIRECTML ? kind : "cpu", gpu }
+  if (next.kind === device.kind && next.gpu === device.gpu && !gpuError) return
+  device = next
+  gpuError = undefined
+  void retire()
 }
 
 async function fetchFile(f: (typeof LOCAL_MODEL.files)[number], target: string, signal: AbortSignal, onBytes: (n: number) => void) {
@@ -133,7 +174,7 @@ export function cancelLocalModelDownload() {
 
 export async function removeLocalModel() {
   cancelLocalModelDownload()
-  await unload()
+  await retire()
   rmSync(join(modelDir(), ".."), { recursive: true, force: true })
   lastError = undefined
   onChange(localModelStatus())
@@ -146,6 +187,10 @@ interface Loaded {
   ort: Ort
   session: import("onnxruntime-node").InferenceSession
   tokenizer: import("@huggingface/tokenizers").Tokenizer
+  on: EmbeddingDevice
+  /** calls using the session, which is released only once they end */
+  runs: number
+  retired: boolean
 }
 
 let loaded: Promise<Loaded> | null = null
@@ -153,39 +198,101 @@ let idle: ReturnType<typeof setTimeout> | null = null
 // The session holds a few hundred MB; let it go once the builder has been quiet for a while.
 const IDLE_MS = 3 * 60_000
 
+// DirectML's errors carry the source path and an HRESULT ahead of the message.
+const gpuMessage = (e: unknown) => {
+  const msg = (e as Error).message ?? String(e)
+  return (/\b[0-9A-F]{8}\s+(.+)$/s.exec(msg)?.[1] ?? msg).trim()
+}
+
 async function load(): Promise<Loaded> {
   const dir = modelDir()
   const ort = await import("onnxruntime-node")
   const { Tokenizer } = await import("@huggingface/tokenizers")
   const tokenizer = new Tokenizer(JSON.parse(readFileSync(join(dir, "tokenizer.json"), "utf8")), JSON.parse(readFileSync(join(dir, "tokenizer_config.json"), "utf8")))
+  const file = join(dir, "onnx", "model_quantized.onnx")
   // No memory arena: a little slower, and well under half the resident memory.
-  const session = await ort.InferenceSession.create(join(dir, "onnx", "model_quantized.onnx"), { executionProviders: ["cpu"], graphOptimizationLevel: "all", enableCpuMemArena: false })
-  return { ort, session, tokenizer }
+  const cpu = { executionProviders: ["cpu"], graphOptimizationLevel: "all", enableCpuMemArena: false } as const
+  if (device.kind === "gpu" && !gpuError) {
+    try {
+      // DirectML runs operators one at a time and plans its own memory; the few it lacks run on the
+      // CPU (the warning saying so is muted).
+      const session = await ort.InferenceSession.create(file, { ...cpu, executionProviders: [{ name: "dml", deviceId: device.gpu }], enableMemPattern: false, executionMode: "sequential", logSeverityLevel: 3 })
+      return { ort, session, tokenizer, on: "gpu", runs: 0, retired: false }
+    } catch (e) {
+      gpuError = gpuMessage(e)
+    }
+  }
+  const session = await ort.InferenceSession.create(file, cpu)
+  return { ort, session, tokenizer, on: "cpu", runs: 0, retired: false }
 }
 
-async function unload() {
+/** Drop the open session: the next call loads a new one, and this one goes once its calls end. */
+function retire(): Promise<void> {
   if (idle) clearTimeout(idle)
   idle = null
   const l = loaded
   loaded = null
-  if (l) await (await l.catch(() => null))?.session.release()
+  return (l ?? Promise.resolve(null))
+    .then(async (x) => {
+      if (!x) return
+      x.retired = true
+      if (x.runs === 0) await x.session.release()
+    })
+    .catch(() => undefined)
 }
 
-function touch() {
+async function acquire(): Promise<Loaded> {
+  for (;;) {
+    const p = (loaded ??= load().catch((e) => {
+      loaded = null
+      throw e
+    }))
+    const l = await p
+    // Retired while loading (the device changed): load again for the new one.
+    if (loaded !== p) continue
+    l.runs++
+    return l
+  }
+}
+
+function done(l: Loaded) {
+  l.runs--
+  if (l.retired && l.runs === 0) void l.session.release().catch(() => undefined)
   if (idle) clearTimeout(idle)
-  idle = setTimeout(() => void unload(), IDLE_MS)
+  idle = setTimeout(() => void retire(), IDLE_MS)
   idle.unref?.()
+}
+
+// DirectML takes one run at a time per session, and on the CPU one run already uses every core.
+let queue: Promise<unknown> = Promise.resolve()
+function serial<T>(fn: () => Promise<T>): Promise<T> {
+  const p = queue.then(fn)
+  queue = p.catch(() => undefined)
+  return p
 }
 
 /** Unit vectors for `texts`, shortest first in batches so padding stays small, returned in order. */
 export async function embedLocal(texts: string[], signal?: AbortSignal): Promise<Float32Array[]> {
   if (!isInstalled()) throw new Error("The local embedding model is not downloaded.")
-  loaded ??= load().catch((e) => {
-    loaded = null
-    throw e
-  })
-  const { ort, session, tokenizer } = await loaded
+  const l = await acquire()
+  try {
+    return await serial(() => run(l, texts, signal))
+  } catch (e) {
+    if (signal?.aborted || l.on !== "gpu") throw e
+    // A GPU that fails mid-build (driver reset, out of memory) hands the work to the CPU until the
+    // device setting changes.
+    gpuError = gpuMessage(e)
+    void retire()
+    return embedLocal(texts, signal)
+  } finally {
+    done(l)
+  }
+}
+
+async function run({ ort, session, tokenizer, on }: Loaded, texts: string[], signal?: AbortSignal): Promise<Float32Array[]> {
   const max = LOCAL_MODEL.maxTokens
+  // Larger batches keep a GPU busy; on the CPU they only cost memory.
+  const size = on === "gpu" ? 32 : 8
   const ids = texts.map((t) => {
     const e = tokenizer.encode(LOCAL_MODEL.prefix + (t || " ")).ids
     // Keep the end-of-sequence token when cutting a long text.
@@ -193,9 +300,10 @@ export async function embedLocal(texts: string[], signal?: AbortSignal): Promise
   })
   const order = ids.map((_, i) => i).sort((a, b) => ids[a].length - ids[b].length)
   const out: Float32Array[] = new Array(texts.length)
-  for (let s = 0; s < order.length; s += 8) {
+  const start = performance.now()
+  for (let s = 0; s < order.length; s += size) {
     if (signal?.aborted) throw new Error("Cancelled.")
-    const batch = order.slice(s, s + 8)
+    const batch = order.slice(s, s + size)
     const len = Math.max(...batch.map((i) => ids[i].length))
     const inp = new BigInt64Array(batch.length * len)
     const mask = new BigInt64Array(batch.length * len)
@@ -213,6 +321,6 @@ export async function embedLocal(texts: string[], signal?: AbortSignal): Promise
       out[i] = data.slice(r * dim, (r + 1) * dim)
     })
   }
-  touch()
+  if (texts.length >= 64) speed = { device: on, perSecond: Math.round((texts.length * 1000) / (performance.now() - start)) }
   return out
 }

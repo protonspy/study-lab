@@ -49,4 +49,32 @@ describe("local embedding model", () => {
     assert.ok(same > 0.88 && same > related && related > unrelated, `${same} ${related} ${unrelated}`)
     assert.equal(e.length, 768)
   })
+
+  // STUDY_LAB_TEST_GPU picks the DirectML adapter (0 by default).
+  const directml = !!realModels && process.platform === "win32"
+  const texts = Array.from({ length: 80 }, (_, i) => `Concept ${i}: ${i % 2 ? "S3 lifecycle rules move objects between storage classes" : "Classes de armazenamento do S3 e regras de ciclo de vida"}.`)
+
+  it("embeds on a GPU through DirectML the same vectors as on the CPU", { skip: !directml }, async () => {
+    local.setLocalDevice("cpu", 0)
+    const cpu = await local.embedLocal(texts)
+    assert.equal(local.localModelStatus().speed?.device, "cpu")
+    local.setLocalDevice("gpu", Number(process.env.STUDY_LAB_TEST_GPU ?? 0))
+    const gpu = await local.embedLocal(texts)
+    const s = local.localModelStatus()
+    assert.equal(s.gpuError, undefined)
+    assert.equal(s.speed?.device, "gpu")
+    for (let i = 0; i < texts.length; i++) assert.ok(cosine(cpu[i], gpu[i]) > 0.999, `text ${i}: ${cosine(cpu[i], gpu[i])}`)
+  })
+
+  it("falls back to the CPU, saying why, when the GPU cannot run the model", { skip: !directml }, async () => {
+    local.setLocalDevice("gpu", 99)
+    const [v] = await local.embedLocal(texts)
+    assert.equal(v.length, 768)
+    const s = local.localModelStatus()
+    assert.equal(s.device, "gpu")
+    assert.ok(s.gpuError && !/dml_provider_factory/.test(s.gpuError), s.gpuError)
+    assert.equal(s.speed?.device, "cpu")
+    local.setLocalDevice("cpu", 0)
+    assert.equal(local.localModelStatus().gpuError, undefined)
+  })
 })

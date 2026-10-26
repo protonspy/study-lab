@@ -22,7 +22,7 @@ Cada **lab** é um espaço de estudo independente: uma certificação, um curso,
   Para uma fonte nova (Coursera…), basta gerar o JSON ou escrever um adapter.
 - **Grafo de conhecimento** ([metodologia](docs/methodology.md)):
   - trechos com evidência;
-  - knowledge components (KCs) extraídos e deduplicados por embeddings, por padrão de um **modelo local** (EmbeddingGemma 300M q8, multilíngue, CPU, ~309 MB baixados uma vez do Hugging Face com revisão e SHA-256 fixados);
+  - knowledge components (KCs) extraídos e deduplicados por embeddings, por padrão de um **modelo local** (EmbeddingGemma 300M q8, multilíngue, ~309 MB baixados uma vez do Hugging Face com revisão e SHA-256 fixados), na CPU ou, se você escolher, na GPU via DirectML;
   - tópicos e domínios;
   - pré-requisitos por ensemble (ordem no curso + reference distance + LLM, sem ciclos);
   - pares confundíveis vindos dos distratores;
@@ -66,13 +66,13 @@ npm run dev
 | `npm run dev` | Electron + Vite com HMR |
 | `npm run build` / `npm start` | Gera `out/` e roda o build |
 | `npm run typecheck` | Tipos do main e do renderer |
-| `npm test` | 56 testes: parser e adapters, OAuth, ingestão, FSRS, modelo do aluno, planner, construtor do grafo, agente contra um OpenRouter simulado e contra um Claude Code falso, instalação fixada, skills, MCP, embedding local |
+| `npm test` | 58 testes: parser e adapters, OAuth, ingestão, FSRS, modelo do aluno, planner, construtor do grafo, agente contra um OpenRouter simulado e contra um Claude Code falso, instalação fixada, skills, MCP, embedding local |
 | `npm run pin-claude-code -- <versão>` | Fixa outra versão do Claude Code (precisa de `gpg`) |
 | `npm run dist` | Instalador Windows (NSIS) |
 
 O banco fica em `%APPDATA%/Study Lab/study-lab.db`. Para usar outro arquivo, defina `STUDY_LAB_DB`. O Claude Code do app fica em `%APPDATA%/Study Lab/claude` e o modelo de embedding em `%APPDATA%/Study Lab/models`.
 
-Para rodar o teste do modelo de embedding real, aponte `STUDY_LAB_TEST_MODELS` para uma pasta `models` que já tenha o modelo baixado.
+Para rodar os testes do modelo de embedding real (CPU e DirectML), aponte `STUDY_LAB_TEST_MODELS` para uma pasta `models` que já tenha o modelo baixado. `STUDY_LAB_TEST_GPU` escolhe o adaptador (0 por padrão).
 
 ## Coach no Claude Code
 

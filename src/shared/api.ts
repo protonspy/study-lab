@@ -8,6 +8,7 @@ import type {
   ChangeEntry,
   ChatMessage,
   ChatThread,
+  EmbeddingDevice,
   EmbeddingSource,
   ImportResult,
   InsightReport,
@@ -151,6 +152,8 @@ export interface Api {
     model?: string
     claudeModel?: string
     embeddings?: EmbeddingSource
+    /** where the local embedding model runs, and on which GPU */
+    embeddingDevice?: { device?: EmbeddingDevice; gpu?: number }
     language?: string
     mcp?: { enabled?: boolean; port?: number; rotateToken?: boolean }
   }): Promise<AiSettings>

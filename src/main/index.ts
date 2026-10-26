@@ -2,7 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, shell } from "electron"
 import { join } from "node:path"
 import { API_METHODS, type Api, type MainEvent } from "@shared/api"
 import { LANGUAGES, PRESETS } from "@shared/defaults"
-import type { AiSettings } from "@shared/types"
+import type { AiSettings, EmbeddingDevice } from "@shared/types"
 import { runAnalyze, runChat, runGenerate, runPlan, chatTitle } from "./agent"
 import { runBuildKb } from "./buildkb"
 import { getSetting, openDb, setSetting } from "./db"
@@ -32,7 +32,7 @@ import {
 import { isAnthropicUrl } from "./claude/account"
 import { embeddingSource } from "./embeddings"
 import { activeModel, initProvider, provider } from "./llm"
-import { cancelLocalModelDownload, downloadLocalModel, localModelStatus, onLocalModelChange, removeLocalModel } from "./localEmbed"
+import { cancelLocalModelDownload, detectGpus, downloadLocalModel, localModelStatus, onLocalModelChange, removeLocalModel, setLocalDevice } from "./localEmbed"
 import * as repo from "./repo"
 import * as viz from "./viz"
 import { labLearner, labPlan, plannerPlan } from "./learner"
@@ -58,6 +58,12 @@ function aiSettings(): AiSettings {
 }
 
 const pushAi = () => emit({ type: "ai", ai: aiSettings() })
+
+/** The local embedding model runs on the CPU unless the learner picked a GPU; the discrete one by default. */
+async function applyEmbeddingDevice() {
+  const best = await detectGpus().catch(() => 0)
+  setLocalDevice(getSetting<EmbeddingDevice>("ai.embeddings.device", "cpu"), getSetting("ai.embeddings.gpu", best))
+}
 
 const api: Api = {
   /* labs */
@@ -143,6 +149,12 @@ const api: Api = {
     if (patch.model) setSetting("ai.model", patch.model.trim())
     if (patch.claudeModel && (CLAUDE_MODELS as readonly string[]).includes(patch.claudeModel)) setSetting("claude.model", patch.claudeModel)
     if (patch.embeddings === "local" || patch.embeddings === "openrouter") setSetting("ai.embeddings", patch.embeddings)
+    if (patch.embeddingDevice) {
+      const { device, gpu } = patch.embeddingDevice
+      if (device === "cpu" || device === "gpu") setSetting("ai.embeddings.device", device)
+      if (Number.isInteger(gpu) && gpu! >= 0) setSetting("ai.embeddings.gpu", gpu)
+      await applyEmbeddingDevice()
+    }
     if (patch.language) setSetting("ai.language", patch.language)
     if (patch.mcp) {
       saveMcpConfig(patch.mcp)
@@ -325,6 +337,8 @@ else {
     registerIpc()
     onClaudeChange(pushAi)
     onLocalModelChange(pushAi)
+    // Asking Chromium for the GPUs can take a moment; the window does not wait for it.
+    void applyEmbeddingDevice().then(pushAi)
     await applyMcp().catch(() => undefined)
     createWindow()
     app.on("activate", () => {

@@ -12,7 +12,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { DEFAULT_MODEL, LANGUAGES } from "@shared/defaults"
 import { api } from "@/lib/lab"
 import { LAB } from "@/lib/data"
-import type { AiProvider, AiSettings, EmbeddingSource, ModelInfo } from "@/lib/types"
+import type { AiProvider, AiSettings, EmbeddingDevice, EmbeddingSource, LocalModelStatus, ModelInfo } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 const price = (usdPerM: number) => (usdPerM === 0 ? "free" : usdPerM < 0.1 ? `$${usdPerM.toFixed(3)}` : `$${usdPerM.toFixed(2)}`)
@@ -319,7 +319,7 @@ function EmbeddingsCard({ ai, setAi }: { ai: AiSettings; setAi: Setter }) {
           <Cpu className="size-4" /> Embeddings
         </CardTitle>
         <CardDescription>
-          How the knowledge-base builder measures similarity between concepts, lectures, questions and cards. The local model runs on this computer's CPU, works offline and costs nothing.
+          How the knowledge-base builder measures similarity between concepts, lectures, questions and cards. The local model runs on this computer, works offline and costs nothing.
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
@@ -364,12 +364,62 @@ function EmbeddingsCard({ ai, setAi }: { ai: AiSettings; setAi: Setter }) {
                 Remove the model
               </Button>
             )}
+            {m.gpus.length > 0 && <DevicePicker m={m} setAi={setAi} />}
+            {m.speed && (
+              <p className="font-mono text-xs tabular text-ink-3">
+                Last build: {m.speed.perSecond} texts/s on the {m.speed.device.toUpperCase()}
+              </p>
+            )}
           </div>
         ) : (
           <p className="text-xs text-ink-3">{ai.hasKey ? "baai/bge-m3 through your OpenRouter key, billed per token." : "Needs an OpenRouter key; without one the builder falls back to lexical similarity."}</p>
         )}
       </CardContent>
     </Card>
+  )
+}
+
+/** CPU or a GPU through DirectML; a GPU that fails leaves the model on the CPU and says why. */
+function DevicePicker({ m, setAi }: { m: LocalModelStatus; setAi: Setter }) {
+  const set = async (patch: { device?: EmbeddingDevice; gpu?: number }) => setAi(await api().updateAiSettings({ embeddingDevice: patch }))
+  return (
+    <div className="flex flex-col gap-2 border-t border-line pt-3">
+      <div className="flex items-center gap-3">
+        <Label className="flex-1">Run on</Label>
+        <ToggleGroup type="single" variant="outline" size="sm" value={m.device} onValueChange={(v) => v && void set({ device: v as EmbeddingDevice })}>
+          <ToggleGroupItem value="cpu">CPU</ToggleGroupItem>
+          <ToggleGroupItem value="gpu">GPU</ToggleGroupItem>
+        </ToggleGroup>
+      </div>
+      {m.device === "gpu" && (
+        <>
+          {m.gpus.length > 1 && (
+            <Select value={String(m.gpu)} onValueChange={(v) => void set({ gpu: Number(v) })}>
+              <SelectTrigger className="w-full">
+                <SelectValue placeholder="Pick a GPU" />
+              </SelectTrigger>
+              <SelectContent>
+                {m.gpus.map((g, i) => (
+                  <SelectItem key={i} value={String(i)}>
+                    {g.name}
+                    {g.highPerformance && <span className="text-xs text-ink-3">· high performance</span>}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+          <p className="text-xs text-ink-3">Through DirectML. A dedicated graphics card is usually several times faster than the CPU; an integrated one can be slower.</p>
+          {m.gpuError && (
+            <div className="flex items-start gap-2">
+              <p className="min-w-0 flex-1 text-xs text-bad">The GPU could not run the model, so it runs on the CPU: {m.gpuError}</p>
+              <Button size="sm" variant="outline" onClick={() => void set({ device: "gpu", gpu: m.gpu })}>
+                <RefreshCw /> Try again
+              </Button>
+            </div>
+          )}
+        </>
+      )}
+    </div>
   )
 }
 

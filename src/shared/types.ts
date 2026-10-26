@@ -403,6 +403,8 @@ export interface ClaudeStatus {
   ready: boolean
 }
 
+export type EmbeddingDevice = "cpu" | "gpu"
+
 export interface LocalModelStatus {
   name: string
   /** bytes to download */
@@ -410,6 +412,16 @@ export interface LocalModelStatus {
   state: "missing" | "downloading" | "ready" | "failed"
   progress?: number
   error?: string
+  /** where the model runs: the CPU, or a GPU through DirectML */
+  device: EmbeddingDevice
+  /** the chosen GPU, an index into `gpus` */
+  gpu: number
+  /** GPUs in DirectML's adapter order; empty where DirectML is not available */
+  gpus: { name: string; highPerformance: boolean }[]
+  /** why the chosen GPU could not run the model; it then runs on the CPU */
+  gpuError?: string
+  /** texts a second over the last large batch, and where it ran */
+  speed?: { device: EmbeddingDevice; perSecond: number }
 }
 
 export interface AiSettings {
